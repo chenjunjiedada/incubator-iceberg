@@ -24,15 +24,18 @@ import java.nio.ByteBuffer
 import java.util
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, PathFilter}
-import org.apache.iceberg.{DataFile, DataFiles, Metrics, MetricsConfig, PartitionSpec}
-import org.apache.iceberg.hadoop.HadoopInputFile
+import org.apache.iceberg.{DataFile, DataFiles, Metrics, MetricsConfig, PartitionSpec, Table}
+import org.apache.iceberg.exceptions.NoSuchTableException
+import org.apache.iceberg.hadoop.{HadoopInputFile, HadoopTables}
 import org.apache.iceberg.orc.OrcMetrics
 import org.apache.iceberg.parquet.ParquetUtil
 import org.apache.iceberg.spark.hacks.Hive
 import org.apache.parquet.hadoop.ParquetFileReader
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.catalog.CatalogTablePartition
 import scala.collection.JavaConverters._
+import scala.collection.immutable.HashMap
 
 object SparkTableUtil {
   /**
@@ -163,7 +166,7 @@ object SparkTableUtil {
           } else {
             val start = buffer.arrayOffset() + buffer.position()
             val end = start + buffer.remaining()
-            util.Arrays.copyOfRange(bytes, start, end);
+            util.Arrays.copyOfRange(bytes, start, end)
           }
         } else {
           val bytes = Array.fill(buffer.remaining())(0.asInstanceOf[Byte])
@@ -297,5 +300,63 @@ object SparkTableUtil {
       )
     }
   }
+
+  def getPartition(dbName: String, tableName: String) :Seq[String] = {
+    val sparkSession = SparkSession.builder().getOrCreate()
+    val catalog = sparkSession.sessionState.catalog.externalCatalog
+
+    return catalog.listPartitionNames(dbName, tableName)
+  }
+
+  def importHiveTable(dbName: String, tableName: String, format: String ): Table = {
+    val sparkSession = SparkSession.builder().getOrCreate()
+    // Step 1: check existence of database and table
+    val catalogService = sparkSession.catalog
+    if (!catalogService.tableExists(dbName, tableName)) {
+      throw new NoSuchTableException("Table does not exist at location")
+    }
+    val conf = sparkSession.sparkContext.hadoopConfiguration
+
+    // Step 2: Prepare the iceberg table
+    val schema = SparkSchemaUtil.schemaForTable(sparkSession, s"$dbName.$tableName")
+    val partitionSpec = SparkSchemaUtil.specForTable(sparkSession, s"$dbName.$tableName")
+    val tables = new HadoopTables(conf)
+    val location = sparkSession.sessionState.catalog.
+      getTableMetadata(new TableIdentifier(tableName, Some(dbName))).location.toString
+    val table = tables.create(schema, partitionSpec, location)
+    val fastAppender = table.newFastAppend()
+
+    // Step 3:
+    val partitions = getPartition(dbName, tableName)
+    if (partitions.isEmpty) {
+      val dataFiles = SparkTableUtil.listPartition( HashMap.empty[String,String], location, format)
+      dataFiles.map(f => fastAppender.appendFile(f.toDataFile(partitionSpec)).apply())
+    } else {
+      val delimiter = "="
+      val slash = "/"
+      val partMap = partitions.map(x => x.split(delimiter)).
+        map(x => {
+          val tmpMap = collection.immutable.HashMap[String, String](x(0) -> x(1))
+          tmpMap
+        })
+
+      val dataFiles = partMap.map(e => SparkTableUtil.listPartition(e,
+        location + slash + e.foldLeft("") {
+          case ("", (k, v)) => k + delimiter + v + slash
+          case (m, (k, v)) => m + "," + k + delimiter + v + slash
+        }, format))
+
+      dataFiles.foreach {
+        part =>
+          part.foreach {
+            f => fastAppender.appendFile(f.toDataFile(partitionSpec)).apply
+          }
+      }
+    }
+    sparkSession.close()
+    fastAppender.commit()
+    table
+  }
+
 }
 
