@@ -60,13 +60,13 @@ object SparkTableUtil {
   }
 
   /**
-    * Returns a DataFrame with a row for each partition that matches the specified 'expression'.
-    *
-    * @param spark a Spark session.
-    * @param table name of the table.
-    * @param expression The expression whose matching partitions are returned.
-    * @return a DataFrame of the table partitions.
-    */
+   * Returns a DataFrame with a row for each partition that matches the specified 'expression'.
+   *
+   * @param spark      a Spark session.
+   * @param table      name of the table.
+   * @param expression The expression whose matching partitions are returned.
+   * @return a DataFrame of the table partitions.
+   */
   def partitionDFByFilter(spark: SparkSession, table: String, expression: String): DataFrame = {
     import spark.implicits._
 
@@ -86,14 +86,14 @@ object SparkTableUtil {
    * metrics are set to null.
    *
    * @param partition partition key, e.g., "a=1/b=2"
-   * @param uri partition location URI
-   * @param format partition format, avro or parquet
+   * @param uri       partition location URI
+   * @param format    partition format, avro or parquet
    * @return a seq of [[SparkDataFile]]
    */
   def listPartition(
-      partition: Map[String, String],
-      uri: String,
-      format: String): Seq[SparkDataFile] = {
+                     partition: Map[String, String],
+                     uri: String,
+                     format: String): Seq[SparkDataFile] = {
     if (format.contains("avro")) {
       listAvroPartition(partition, uri)
     } else if (format.contains("parquet")) {
@@ -109,18 +109,18 @@ object SparkTableUtil {
    * Case class representing a data file.
    */
   case class SparkDataFile(
-      path: String,
-      partition: collection.Map[String, String],
-      format: String,
-      fileSize: Long,
-      rowGroupSize: Long,
-      rowCount: Long,
-      columnSizes: Array[Long],
-      valueCounts: Array[Long],
-      nullValueCounts: Array[Long],
-      lowerBounds: Seq[Array[Byte]],
-      upperBounds: Seq[Array[Byte]]
-    ) {
+                            path: String,
+                            partition: collection.Map[String, String],
+                            format: String,
+                            fileSize: Long,
+                            rowGroupSize: Long,
+                            rowCount: Long,
+                            columnSizes: Array[Long],
+                            valueCounts: Array[Long],
+                            nullValueCounts: Array[Long],
+                            lowerBounds: Seq[Array[Byte]],
+                            upperBounds: Seq[Array[Byte]]
+                          ) {
 
     /**
      * Convert this to a [[DataFile]] that can be added to a [[org.apache.iceberg.Table]].
@@ -135,17 +135,17 @@ object SparkTableUtil {
       }.mkString("/")
 
       DataFiles.builder(spec)
-          .withPath(path)
-          .withFormat(format)
-          .withPartitionPath(partitionKey)
-          .withFileSizeInBytes(fileSize)
-          .withMetrics(new Metrics(rowCount,
-            arrayToMap(columnSizes),
-            arrayToMap(valueCounts),
-            arrayToMap(nullValueCounts),
-            arrayToMap(lowerBounds),
-            arrayToMap(upperBounds)))
-          .build()
+        .withPath(path)
+        .withFormat(format)
+        .withPartitionPath(partitionKey)
+        .withFileSizeInBytes(fileSize)
+        .withMetrics(new Metrics(rowCount,
+          arrayToMap(columnSizes),
+          arrayToMap(valueCounts),
+          arrayToMap(nullValueCounts),
+          arrayToMap(lowerBounds),
+          arrayToMap(upperBounds)))
+        .build()
     }
   }
 
@@ -161,7 +161,7 @@ object SparkTableUtil {
         val copy = if (buffer.hasArray) {
           val bytes = buffer.array()
           if (buffer.arrayOffset() == 0 && buffer.position() == 0 &&
-              bytes.length == buffer.remaining()) {
+            bytes.length == buffer.remaining()) {
             bytes
           } else {
             val start = buffer.arrayOffset() + buffer.position()
@@ -232,8 +232,8 @@ object SparkTableUtil {
   }
 
   private def listAvroPartition(
-      partitionPath: Map[String, String],
-      partitionUri: String): Seq[SparkDataFile] = {
+                                 partitionPath: Map[String, String],
+                                 partitionUri: String): Seq[SparkDataFile] = {
     val conf = new Configuration()
     val partition = new Path(partitionUri)
     val fs = partition.getFileSystem(conf)
@@ -254,9 +254,9 @@ object SparkTableUtil {
 
   //noinspection ScalaDeprecation
   private def listParquetPartition(
-      partitionPath: Map[String, String],
-      partitionUri: String,
-      metricsSpec: MetricsConfig = MetricsConfig.getDefault): Seq[SparkDataFile] = {
+                                    partitionPath: Map[String, String],
+                                    partitionUri: String,
+                                    metricsSpec: MetricsConfig = MetricsConfig.getDefault): Seq[SparkDataFile] = {
     val conf = new Configuration()
     val partition = new Path(partitionUri)
     val fs = partition.getFileSystem(conf)
@@ -278,8 +278,8 @@ object SparkTableUtil {
   }
 
   private def listOrcPartition(
-      partitionPath: Map[String, String],
-      partitionUri: String): Seq[SparkDataFile] = {
+                                partitionPath: Map[String, String],
+                                partitionUri: String): Seq[SparkDataFile] = {
     val conf = new Configuration()
     val partition = new Path(partitionUri)
     val fs = partition.getFileSystem(conf)
@@ -301,14 +301,14 @@ object SparkTableUtil {
     }
   }
 
-  def getPartition(dbName: String, tableName: String) :Seq[String] = {
+  def getPartitions(dbName: String, tableName: String): Seq[String] = {
     val sparkSession = SparkSession.builder().getOrCreate()
     val catalog = sparkSession.sessionState.catalog.externalCatalog
 
     return catalog.listPartitionNames(dbName, tableName)
   }
 
-  def importHiveTable(dbName: String, tableName: String, format: String ): Table = {
+  def convertSparkTable(dbName: String, tableName: String, format: String): Table = {
     val sparkSession = SparkSession.builder().getOrCreate()
     // Step 1: check existence of database and table
     val catalogService = sparkSession.catalog
@@ -324,37 +324,39 @@ object SparkTableUtil {
     val location = sparkSession.sessionState.catalog.
       getTableMetadata(new TableIdentifier(tableName, Some(dbName))).location.toString
     val table = tables.create(schema, partitionSpec, location)
-    val fastAppender = table.newFastAppend()
 
-    // Step 3:
-    val partitions = getPartition(dbName, tableName)
+    // Step 3: Lock table??
+    // Step 4: append file in parallel
+    val partitions = getPartitions(dbName, tableName)
     if (partitions.isEmpty) {
-      val dataFiles = SparkTableUtil.listPartition( HashMap.empty[String,String], location, format)
-      dataFiles.map(f => fastAppender.appendFile(f.toDataFile(partitionSpec)).apply())
+      val fastAppender = table.newFastAppend()
+      val dataFiles = SparkTableUtil.listPartition(HashMap.empty[String, String], location, format)
+      dataFiles.map { f => fastAppender.appendFile(f.toDataFile(partitionSpec)).apply }
+      fastAppender.commit()
     } else {
-      val delimiter = "="
-      val slash = "/"
-      val partMap = partitions.map(x => x.split(delimiter)).
-        map(x => {
-          val tmpMap = collection.immutable.HashMap[String, String](x(0) -> x(1))
-          tmpMap
-        })
+      // convert partition value from string "key=value" to map(key,value)
+      val partitionMap = partitions.map(x => x.split("="))
+        .map { x => collection.immutable.HashMap[String, String](x(0) -> x(1)) }
 
-      val dataFiles = partMap.map(e => SparkTableUtil.listPartition(e,
-        location + slash + e.foldLeft("") {
-          case ("", (k, v)) => k + delimiter + v + slash
-          case (m, (k, v)) => m + "," + k + delimiter + v + slash
-        }, format))
+      // retrieve data files according to partition. result = [[datafiles], [datafiles]]
+      val dataFiles = partitionMap.map { e =>
+        SparkTableUtil.listPartition(e,
+          location + "/" + e.foldLeft("") {
+            case ("", (k, v)) => k + "=" + v + "/"
+            case (m, (k, v)) => m + "," + k + "=" + v + "/"
+          }, format)
+      }
 
-      dataFiles.foreach {
-        part =>
-          part.foreach {
-            f => fastAppender.appendFile(f.toDataFile(partitionSpec)).apply
-          }
+      // execute the action.
+      dataFiles.foreach { part => {
+        val fastAppender = table.newFastAppend()
+        part.foreach { f => fastAppender.appendFile(f.toDataFile(partitionSpec)) }
+        fastAppender.apply()
+        fastAppender.commit()
+      }
       }
     }
-    sparkSession.close()
-    fastAppender.commit()
+
     table
   }
 
