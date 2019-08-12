@@ -22,6 +22,7 @@ package org.apache.iceberg.spark
 import com.google.common.collect.Maps
 import java.nio.ByteBuffer
 import java.util
+import java.util.UUID
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, PathFilter}
 import org.apache.iceberg._
@@ -312,7 +313,7 @@ object SparkTableUtil {
   def buildManifest(table: Table,
                     sparkDataFiles: Seq[SparkDataFile],
                     partitionSpec: PartitionSpec): ManifestFile = {
-    val outputFile = table.io.newOutputFile("/tmp")
+    val outputFile = table.io.newOutputFile(FileFormat.AVRO.addExtension("/tmp/" + UUID.randomUUID.toString))
     val writer = ManifestWriter.write(partitionSpec, outputFile)
     try {
       for (file <- sparkDataFiles) {
