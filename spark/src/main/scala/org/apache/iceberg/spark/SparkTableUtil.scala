@@ -24,7 +24,7 @@ import java.nio.ByteBuffer
 import java.util
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, PathFilter}
-import org.apache.iceberg.{DataFile, DataFiles, Metrics, MetricsConfig, PartitionSpec, Table}
+import org.apache.iceberg._
 import org.apache.iceberg.exceptions.NoSuchTableException
 import org.apache.iceberg.hadoop.{HadoopInputFile, HadoopTables}
 import org.apache.iceberg.orc.OrcMetrics
@@ -38,6 +38,7 @@ import scala.collection.JavaConverters._
 import scala.collection.immutable.HashMap
 
 object SparkTableUtil {
+
   /**
    * Returns a DataFrame with a row for each partition in the table.
    *
@@ -308,6 +309,22 @@ object SparkTableUtil {
     return catalog.listPartitionNames(dbName, tableName)
   }
 
+  def buildManifest(table: Table,
+                    sparkDataFiles: Seq[SparkDataFile],
+                    partitionSpec: PartitionSpec): ManifestFile = {
+    val outputFile = table.io.newOutputFile("/tmp")
+    val writer = ManifestWriter.write(partitionSpec, outputFile)
+    try {
+      for (file <- sparkDataFiles) {
+        writer.add(file.toDataFile(partitionSpec))
+      }
+    } finally {
+      writer.close()
+    }
+
+    writer.toManifestFile
+  }
+
   def convertSparkTable(dbName: String, tableName: String, format: String): Table = {
     val sparkSession = SparkSession.builder().getOrCreate()
     // Step 1: check existence of database and table
@@ -317,22 +334,18 @@ object SparkTableUtil {
     }
     val conf = sparkSession.sparkContext.hadoopConfiguration
 
-    // Step 2: Prepare the iceberg table
     val schema = SparkSchemaUtil.schemaForTable(sparkSession, s"$dbName.$tableName")
     val partitionSpec = SparkSchemaUtil.specForTable(sparkSession, s"$dbName.$tableName")
     val tables = new HadoopTables(conf)
     val location = sparkSession.sessionState.catalog.
       getTableMetadata(new TableIdentifier(tableName, Some(dbName))).location.toString
     val table = tables.create(schema, partitionSpec, location)
+    val fastAppender = table.newFastAppend()
 
-    // Step 3: Lock table??
-    // Step 4: append file in parallel
     val partitions = getPartitions(dbName, tableName)
     if (partitions.isEmpty) {
-      val fastAppender = table.newFastAppend()
       val dataFiles = SparkTableUtil.listPartition(HashMap.empty[String, String], location, format)
       dataFiles.map { f => fastAppender.appendFile(f.toDataFile(partitionSpec)).apply }
-      fastAppender.commit()
     } else {
       // convert partition value from string "key=value" to map(key,value)
       val partitionMap = partitions.map(x => x.split("="))
@@ -349,14 +362,13 @@ object SparkTableUtil {
 
       // execute the action.
       dataFiles.foreach { part => {
-        val fastAppender = table.newFastAppend()
-        part.foreach { f => fastAppender.appendFile(f.toDataFile(partitionSpec)) }
-        fastAppender.apply()
-        fastAppender.commit()
-      }
-      }
-    }
+        val manifestFile = buildManifest(table, part, partitionSpec)
+        fastAppender.appendManifest(manifestFile)
+        }}
 
+      fastAppender.apply()
+    }
+    fastAppender.commit()
     table
   }
 
