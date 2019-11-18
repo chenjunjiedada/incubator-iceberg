@@ -30,21 +30,26 @@ class InheritableMetadataFactory {
   }
 
   static InheritableMetadata fromManifest(ManifestFile manifest) {
-    return new BaseInheritableMetadata(manifest.snapshotId());
+    return new BaseInheritableMetadata(manifest.snapshotId(), manifest.sequenceNumber());
   }
 
   static class BaseInheritableMetadata implements InheritableMetadata {
 
     private final Long snapshotId;
+    private final Long sequenceNumber;
 
-    private BaseInheritableMetadata(Long snapshotId) {
+    private BaseInheritableMetadata(Long snapshotId, Long sequenceNumber) {
       this.snapshotId = snapshotId;
+      this.sequenceNumber = sequenceNumber;
     }
 
     @Override
     public ManifestEntry apply(ManifestEntry manifestEntry) {
       if (manifestEntry.snapshotId() == null) {
         manifestEntry.setSnapshotId(snapshotId);
+      }
+      if (manifestEntry.sequenceNumber() == null && this.sequenceNumber != null) {
+        manifestEntry.setSequenceNumber(sequenceNumber);
       }
       return manifestEntry;
     }

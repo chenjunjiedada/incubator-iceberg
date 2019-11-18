@@ -69,7 +69,7 @@ public class TableMetadata {
     }
     PartitionSpec freshSpec = specBuilder.build();
 
-    return new TableMetadata(null, DEFAULT_TABLE_FORMAT_VERSION, UUID.randomUUID().toString(), location,
+    return new TableMetadata(null, SUPPORTED_TABLE_FORMAT_VERSION, UUID.randomUUID().toString(), location,
         INITIAL_SEQUENCE_NUMBER, System.currentTimeMillis(),
         lastColumnId.get(), freshSchema, INITIAL_SPEC_ID, ImmutableList.of(freshSpec),
         ImmutableMap.copyOf(properties), -1, ImmutableList.of(),

@@ -93,6 +93,7 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
     Preconditions.checkArgument(
         manifest.snapshotId() == null || manifest.snapshotId() == -1,
         "Snapshot id must be assigned during commit");
+    Preconditions.checkArgument(manifest.sequenceNumber() == null, "Sequence number must be assigned during commit");
 
     if (snapshotIdInheritanceEnabled && manifest.snapshotId() == null) {
       summaryBuilder.addedManifest(manifest);
@@ -128,17 +129,25 @@ class FastAppend extends SnapshotProducer<AppendFiles> implements AppendFiles {
       throw new RuntimeIOException(e, "Failed to write manifest");
     }
 
-    // TODO: add sequence numbers here
+    Iterable<ManifestFile> newManifestsWithMetadata = Iterables.transform(newManifests,
+        manifest -> GenericManifestFile.copyOf(manifest).withSequenceNumber(base.nextSequenceNumber()).build());
+
     Iterable<ManifestFile> appendManifestsWithMetadata = Iterables.transform(
         Iterables.concat(appendManifests, rewrittenAppendManifests),
-        manifest -> GenericManifestFile.copyOf(manifest).withSnapshotId(snapshotId()).build());
-    Iterables.addAll(newManifests, appendManifestsWithMetadata);
+        manifest -> GenericManifestFile.copyOf(manifest).withSnapshotId(snapshotId())
+            .withSequenceNumber(base.nextSequenceNumber())
+            .build());
+
+    List<ManifestFile> manifestsWithMetadata = Lists.newArrayList();
+    Iterables.addAll(manifestsWithMetadata, newManifestsWithMetadata);
+    Iterables.addAll(manifestsWithMetadata, appendManifestsWithMetadata);
+
 
     if (base.currentSnapshot() != null) {
-      newManifests.addAll(base.currentSnapshot().manifests());
+      manifestsWithMetadata.addAll(base.currentSnapshot().manifests());
     }
 
-    return newManifests;
+    return manifestsWithMetadata;
   }
 
   @Override

@@ -213,7 +213,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       appendManifests.add(manifest);
       appendedManifest = manifest;
     } else {
-      // the manifest must be rewritten with this update's snapshot ID
+      // the manifest must be rewritten with this update's snapshot ID and sequence number
       ManifestFile copiedManifest = copyManifest(manifest);
       rewrittenAppendManifests.add(copiedManifest);
       appendedManifest = copiedManifest;
@@ -272,10 +272,11 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
         newManifests = Iterables.concat(appendManifests, rewrittenAppendManifests);
       }
 
-      // TODO: add sequence numbers here
       Iterable<ManifestFile> newManifestsWithMetadata = Iterables.transform(
           newManifests,
-          manifest -> GenericManifestFile.copyOf(manifest).withSnapshotId(snapshotId()).build());
+          manifest -> GenericManifestFile.copyOf(manifest).withSnapshotId(snapshotId())
+              .withSequenceNumber(base.nextSequenceNumber())
+              .build());
 
       // filter any existing manifests
       List<ManifestFile> filtered;
@@ -297,7 +298,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       if (mergeEnabled) {
         groupManifestsByPartitionSpec(groups, unmergedManifests);
         for (Map.Entry<Integer, List<ManifestFile>> entry : groups.entrySet()) {
-          Iterables.addAll(manifests, mergeGroup(entry.getKey(), entry.getValue()));
+          Iterables.addAll(manifests, mergeGroup(entry.getKey(), entry.getValue(), base.nextSequenceNumber()));
         }
       } else {
         Iterables.addAll(manifests, unmergedManifests);
@@ -601,7 +602,7 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   }
 
   @SuppressWarnings("unchecked")
-  private Iterable<ManifestFile> mergeGroup(int specId, List<ManifestFile> group)
+  private Iterable<ManifestFile> mergeGroup(int specId, List<ManifestFile> group, long sequenceNumber)
       throws IOException {
     // use a lookback of 1 to avoid reordering the manifests. using 1 also means this should pack
     // from the end so that the manifest that gets under-filled is the first one, which will be
@@ -637,14 +638,14 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
             outputManifests.addAll(bin);
           } else {
             // merge the group
-            outputManifests.add(createManifest(specId, bin));
+            outputManifests.add(createManifest(specId, bin, sequenceNumber));
           }
         }, IOException.class);
 
     return Iterables.concat(binResults);
   }
 
-  private ManifestFile createManifest(int specId, List<ManifestFile> bin) throws IOException {
+  private ManifestFile createManifest(int specId, List<ManifestFile> bin, long sequenceNumber) throws IOException {
     // if this merge was already rewritten, use the existing file.
     // if the new files are in this merge, then the ManifestFile for the new files has changed and
     // will be a cache miss.
@@ -662,11 +663,20 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
               // should be added to the new manifest
               if (entry.snapshotId() == snapshotId()) {
                 writer.addEntry(entry);
+              } else {
+                // because the original manifest will be cleanup, it needs to save the sequence number to the entry.
+                if (entry.sequenceNumber() == null) {
+                  entry.setSequenceNumber(manifest.sequenceNumber());
+                }
               }
             } else if (entry.status() == Status.ADDED && entry.snapshotId() == snapshotId()) {
               // adds from this snapshot are still adds, otherwise they should be existing
               writer.addEntry(entry);
             } else {
+              // because the original manifest will be cleanup, it needs to save the sequence number to the entry.
+              if (entry.sequenceNumber() == null) {
+                entry.setSequenceNumber(manifest.sequenceNumber());
+              }
               // add all files from the old manifest as existing files
               writer.existing(entry);
             }
@@ -677,7 +687,8 @@ abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
       writer.close();
     }
 
-    ManifestFile manifest = writer.toManifestFile();
+    ManifestFile manifest = GenericManifestFile.copyOf(writer.toManifestFile())
+        .withSequenceNumber(sequenceNumber).build();
 
     // update the cache
     mergeManifests.put(bin, manifest);

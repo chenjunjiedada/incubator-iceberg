@@ -56,6 +56,7 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
   private Status status = Status.EXISTING;
   private Long snapshotId = null;
   private DataFile file = null;
+  private Long sequenceNumber = null;
 
   ManifestEntry(org.apache.avro.Schema schema) {
     this.schema = schema;
@@ -72,6 +73,7 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
     this.fileWrapper = new IndexedDataFile(schema.getField("data_file").schema());
     this.status = toCopy.status;
     this.snapshotId = toCopy.snapshotId;
+    this.sequenceNumber = toCopy.sequenceNumber;
     if (fullCopy) {
       this.file = toCopy.file().copy();
     } else {
@@ -79,23 +81,26 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
     }
   }
 
-  ManifestEntry wrapExisting(Long newSnapshotId, DataFile newFile) {
+  ManifestEntry wrapExisting(Long newSnapshotId, Long newSequenceNumber, DataFile newFile) {
     this.status = Status.EXISTING;
     this.snapshotId = newSnapshotId;
+    this.sequenceNumber = newSequenceNumber;
     this.file = newFile;
     return this;
   }
 
-  ManifestEntry wrapAppend(Long newSnapshotId, DataFile newFile) {
+  ManifestEntry wrapAppend(Long newSnapshotId, Long newSequenceNumber, DataFile newFile) {
     this.status = Status.ADDED;
     this.snapshotId = newSnapshotId;
+    this.sequenceNumber = newSequenceNumber;
     this.file = newFile;
     return this;
   }
 
-  ManifestEntry wrapDelete(Long newSnapshotId, DataFile newFile) {
+  ManifestEntry wrapDelete(Long newSnapshotId, Long newSequenceNumber, DataFile newFile) {
     this.status = Status.DELETED;
     this.snapshotId = newSnapshotId;
+    this.sequenceNumber = newSequenceNumber;
     this.file = newFile;
     return this;
   }
@@ -112,6 +117,13 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
    */
   public Long snapshotId() {
     return snapshotId;
+  }
+
+  /**
+   * @return sequence number of the snapshot in which the file was added to the table
+   */
+  public Long sequenceNumber() {
+    return sequenceNumber;
   }
 
   /**
@@ -133,6 +145,10 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
     this.snapshotId = snapshotId;
   }
 
+  public void setSequenceNumber(Long sequenceNumber) {
+    this.sequenceNumber = sequenceNumber;
+  }
+
   @Override
   public void put(int i, Object v) {
     switch (i) {
@@ -144,6 +160,9 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
         return;
       case 2:
         this.file = (DataFile) v;
+        return;
+      case 3:
+        this.sequenceNumber = (Long) v;
         return;
       default:
         // ignore the object, it must be from a newer version of the format
@@ -163,6 +182,8 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
         } else {
           return fileWrapper.wrap(file);
         }
+      case 3:
+        return sequenceNumber;
       default:
         throw new UnsupportedOperationException("Unknown field ordinal: " + i);
     }
@@ -187,13 +208,15 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
     return new Schema(
         required(0, "status", IntegerType.get()),
         optional(1, "snapshot_id", LongType.get()),
-        required(2, "data_file", fileStruct));
+        required(2, "data_file", fileStruct),
+        optional(3, "sequence_number", LongType.get()));
   }
 
   @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("status", status)
+        .add("sequence_number", sequenceNumber)
         .add("snapshot_id", snapshotId)
         .add("file", file)
         .toString();
@@ -289,6 +312,8 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
           return wrapped.keyMetadata();
         case 12:
           return wrapped.splitOffsets();
+        case 13:
+          return wrapped.sequenceNumber();
       }
       throw new IllegalArgumentException("Unknown field ordinal: " + pos);
     }
@@ -361,6 +386,11 @@ class ManifestEntry implements IndexedRecord, SpecificData.SchemaConstructable {
     @Override
     public List<Long> splitOffsets() {
       return wrapped.splitOffsets();
+    }
+
+    @Override
+    public long sequenceNumber() {
+      return wrapped.sequenceNumber();
     }
 
     @Override

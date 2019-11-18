@@ -205,6 +205,7 @@ class BaseSnapshot implements Snapshot {
         .add("operation", operation)
         .add("summary", summary)
         .add("manifests", manifests())
+        .add("sequence_number", sequenceNumber)
         .toString();
   }
 }

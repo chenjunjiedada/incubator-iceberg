@@ -256,6 +256,11 @@ public class TestHelpers {
     }
 
     @Override
+    public Long sequenceNumber() {
+      return null;
+    }
+
+    @Override
     public List<PartitionFieldSummary> partitions() {
       return partitions;
     }
@@ -361,6 +366,11 @@ public class TestHelpers {
     @Override
     public List<Long> splitOffsets() {
       return null;
+    }
+
+    @Override
+    public long sequenceNumber() {
+      return 0;
     }
   }
 }
