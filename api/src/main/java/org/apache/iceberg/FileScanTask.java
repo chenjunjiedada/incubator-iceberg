@@ -33,6 +33,13 @@ public interface FileScanTask extends ScanTask {
   DataFile file();
 
   /**
+   * The deletion files
+   */
+  default Iterable<DataFile> deletionFiles() {
+    return null;
+  }
+
+  /**
    * The {@link PartitionSpec spec} used to store this file.
    *
    * @return the partition spec from this file's manifest

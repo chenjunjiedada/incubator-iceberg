@@ -186,6 +186,7 @@ public class DataFiles {
     private Map<Integer, ByteBuffer> upperBounds = null;
     private ByteBuffer keyMetadata = null;
     private List<Long> splitOffsets = null;
+    private Integer deletionType = null;
 
     public Builder() {
       this.spec = null;
@@ -315,6 +316,11 @@ public class DataFiles {
       return this;
     }
 
+    public Builder withDeletionType(Integer type) {
+      this.deletionType = type;
+      return this;
+    }
+
     public Builder withEncryptionKeyMetadata(ByteBuffer newKeyMetadata) {
       this.keyMetadata = newKeyMetadata;
       return this;
@@ -337,7 +343,7 @@ public class DataFiles {
           filePath, format, isPartitioned ? partitionData.copy() : null,
           fileSizeInBytes, new Metrics(
               recordCount, columnSizes, valueCounts, nullValueCounts, lowerBounds, upperBounds),
-          keyMetadata, splitOffsets);
+          keyMetadata, splitOffsets, deletionType);
     }
   }
 

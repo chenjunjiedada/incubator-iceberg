@@ -34,7 +34,7 @@ public class DataTableScan extends BaseTableScan {
 
   static final ImmutableList<String> SCAN_COLUMNS = ImmutableList.of(
       "snapshot_id", "file_path", "file_ordinal", "file_format", "block_size_in_bytes",
-      "file_size_in_bytes", "record_count", "partition", "key_metadata"
+      "file_size_in_bytes", "record_count", "partition", "key_metadata", "deletion_type"
   );
   static final ImmutableList<String> SCAN_WITH_STATS_COLUMNS = ImmutableList.<String>builder()
       .addAll(SCAN_COLUMNS)
@@ -88,7 +88,8 @@ public class DataTableScan extends BaseTableScan {
         .select(colStats ? SCAN_WITH_STATS_COLUMNS : SCAN_COLUMNS)
         .filterData(rowFilter)
         .specsById(ops.current().specsById())
-        .ignoreDeleted();
+        .ignoreDeleted()
+        .filterManifestEntries(manifestEntry -> manifestEntry.file().deletionType() == 0);
 
     if (PLAN_SCANS_WITH_WORKER_POOL && snapshot.manifests().size() > 1) {
       manifestGroup = manifestGroup.planWith(ThreadPools.getWorkerPool());

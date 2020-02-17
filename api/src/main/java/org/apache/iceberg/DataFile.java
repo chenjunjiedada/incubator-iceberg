@@ -60,8 +60,9 @@ public interface DataFile {
             IntegerType.get(), BinaryType.get())),
         optional(131, "key_metadata", BinaryType.get()),
         optional(132, "split_offsets", ListType.ofRequired(133, LongType.get())),
-        optional(134, "sequence_number", LongType.get())
-        // NEXT ID TO ASSIGN: 135
+        optional(134, "sequence_number", LongType.get()),
+        optional(135, "deletion_type", IntegerType.get())
+        // NEXT ID TO ASSIGN: 136
     );
   }
 
@@ -159,5 +160,12 @@ public interface DataFile {
    * If the sequence number is not specified it is inherited from the manifest file struct in the manifest list file.
    */
   long sequenceNumber();
+
+  /**
+   * The deletion type indicate the type of data file. 0: normal data file 1: deletion file
+   *
+   * @return The type of data file.
+   */
+  int deletionType();
 
 }

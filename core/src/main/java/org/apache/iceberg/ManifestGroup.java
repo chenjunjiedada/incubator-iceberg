@@ -24,6 +24,8 @@ import com.github.benmanes.caffeine.cache.LoadingCache;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -127,6 +129,44 @@ class ManifestGroup {
     return this;
   }
 
+  private CloseableIterable<ManifestEntry> filterDeletionEntries() {
+    // TODO: consider filter with other specId when it is a partitioned level row delete
+    Iterable<ManifestFile> manifestFiles = Iterables.filter(manifests,
+        manifest -> manifest.partitionSpecId() == PartitionSpec.unpartitioned().specId());
+
+    CloseableIterable<ManifestEntry> deleteEntries = CloseableIterable.concat(Iterables.transform(manifestFiles,
+        manifestFile -> {
+          // we need to copy the manifest entries here since we reuse the container when reading manifestFile.
+          return CloseableIterable.transform(
+              ManifestReader.read(manifestFile, io, specsById).filterPartitions(partitionFilter).allEntries(),
+              ManifestEntry::copy);
+        }));
+
+    return CloseableIterable.filter(deleteEntries,
+        entry -> entry.file().deletionType() == GenericDataFile.FILE_AND_POSITION_DELETION_FILE);
+  }
+
+  private List<DataFile> matchedDeletionFiles(ManifestEntry baseEntry,
+                                              CloseableIterable<ManifestEntry> entries) {
+    List<DataFile> matchedDataFiles = new ArrayList<>();
+    String baseFileName = baseEntry.file().path().toString();
+
+    // Assume the records of delete files are sorted by file name.
+    for (ManifestEntry entry : entries) {
+      if (entry.sequenceNumber() > baseEntry.sequenceNumber() &&
+          entry.file().lowerBounds() != null && entry.file().upperBounds() != null) {
+        String lowerBound = new String(entry.file().lowerBounds().get(1).array(), StandardCharsets.UTF_8);
+        String upperBound = new String(entry.file().upperBounds().get(1).array(), StandardCharsets.UTF_8);
+        if (baseFileName.compareTo(lowerBound) >= 0 && baseFileName.compareTo(upperBound) <= 0) {
+          matchedDataFiles.add(entry.file());
+        }
+      }
+    }
+
+    return matchedDataFiles;
+  }
+
+
   /**
    * Returns a iterable of scan tasks. It is safe to add entries of this iterable
    * to a collection as {@link DataFile} in each {@link FileScanTask} is defensively
@@ -147,10 +187,11 @@ class ManifestGroup {
       ResidualEvaluator residuals = residualCache.get(partitionSpecId);
       if (dropStats) {
         return CloseableIterable.transform(entries, e -> new BaseFileScanTask(
-            e.file().copyWithoutStats(), schemaString, specString, residuals));
+            e.file().copyWithoutStats(), matchedDeletionFiles(e, filterDeletionEntries()),
+            schemaString, specString, residuals));
       } else {
         return CloseableIterable.transform(entries, e -> new BaseFileScanTask(
-            e.file().copy(), schemaString, specString, residuals));
+            e.file().copy(), matchedDeletionFiles(e, filterDeletionEntries()), schemaString, specString, residuals));
       }
     });
 

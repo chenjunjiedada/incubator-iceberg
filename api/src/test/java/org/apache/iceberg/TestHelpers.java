@@ -382,5 +382,10 @@ public class TestHelpers {
     public long sequenceNumber() {
       return 0;
     }
+
+    @Override
+    public int deletionType() {
+      return 0;
+    }
   }
 }

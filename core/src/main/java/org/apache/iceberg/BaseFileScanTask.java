@@ -35,7 +35,17 @@ class BaseFileScanTask implements FileScanTask {
   private final String specString;
   private final ResidualEvaluator residuals;
 
+  private Iterable<DataFile> deletionFiles = null;
   private transient PartitionSpec spec = null;
+
+  BaseFileScanTask(DataFile file, Iterable<DataFile> deletionFiles, String schemaString, String specString,
+                   ResidualEvaluator residuals) {
+    this.file = file;
+    this.schemaString = schemaString;
+    this.specString = specString;
+    this.residuals = residuals;
+    this.deletionFiles = deletionFiles;
+  }
 
   BaseFileScanTask(DataFile file, String schemaString, String specString, ResidualEvaluator residuals) {
     this.file = file;
@@ -55,6 +65,11 @@ class BaseFileScanTask implements FileScanTask {
       this.spec = PartitionSpecParser.fromJson(SchemaParser.fromJson(schemaString), specString);
     }
     return spec;
+  }
+
+  @Override
+  public Iterable<DataFile> deletionFiles() {
+    return deletionFiles;
   }
 
   @Override
@@ -178,6 +193,11 @@ class BaseFileScanTask implements FileScanTask {
       this.offset = offset;
       this.len = len;
       this.fileScanTask = fileScanTask;
+    }
+
+    @Override
+    public Iterable<DataFile> deletionFiles() {
+      return fileScanTask.deletionFiles();
     }
 
     @Override

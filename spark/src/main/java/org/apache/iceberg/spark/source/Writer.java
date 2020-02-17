@@ -48,6 +48,7 @@ import org.apache.iceberg.avro.Avro;
 import org.apache.iceberg.encryption.EncryptedOutputFile;
 import org.apache.iceberg.encryption.EncryptionManager;
 import org.apache.iceberg.exceptions.RuntimeIOException;
+import org.apache.iceberg.hadoop.HadoopInputFile;
 import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.LocationProvider;
@@ -92,7 +93,7 @@ class Writer implements DataSourceWriter {
   private final String applicationId;
   private final String wapId;
   private final long targetFileSize;
-  private final Schema dsSchema;
+  private final Schema writeSchema;
 
   Writer(Table table, Broadcast<FileIO> io, Broadcast<EncryptionManager> encryptionManager,
          DataSourceOptions options, boolean replacePartitions, String applicationId, Schema dsSchema) {
@@ -109,7 +110,7 @@ class Writer implements DataSourceWriter {
     this.replacePartitions = replacePartitions;
     this.applicationId = applicationId;
     this.wapId = wapId;
-    this.dsSchema = dsSchema;
+    this.writeSchema = dsSchema.withMetaColumn();
 
     long tableTargetFileSize = PropertyUtil.propertyAsLong(
         table.properties(), WRITE_TARGET_FILE_SIZE_BYTES, WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT);
@@ -132,7 +133,7 @@ class Writer implements DataSourceWriter {
   public DataWriterFactory<InternalRow> createWriterFactory() {
     return new WriterFactory(
         table.spec(), format, table.locationProvider(), table.properties(), io, encryptionManager, targetFileSize,
-        dsSchema);
+        writeSchema);
   }
 
   @Override
@@ -396,7 +397,14 @@ class Writer implements DataSourceWriter {
         openCurrent();
       }
 
-      currentAppender.add(row);
+      String fileName;
+      if (currentFile.encryptingOutputFile().toInputFile() instanceof HadoopInputFile) {
+        fileName = ((HadoopInputFile) currentFile.encryptingOutputFile().toInputFile()).getStat().getPath().toString();
+      } else {
+        fileName = currentFile.encryptingOutputFile().toInputFile().location();
+      }
+      // Hook the internal row with metadata columns
+      currentAppender.add(new InternalRowWithMeta(row, fileName, currentRows));
       currentRows++;
     }
 

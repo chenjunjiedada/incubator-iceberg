@@ -30,12 +30,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Function;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
@@ -81,6 +76,8 @@ import org.apache.spark.sql.catalyst.expressions.AttributeReference;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.catalyst.expressions.JoinedRow;
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection;
+import org.apache.spark.sql.catalyst.util.ArrayData;
+import org.apache.spark.sql.catalyst.util.MapData;
 import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.sources.v2.DataSourceOptions;
 import org.apache.spark.sql.sources.v2.reader.DataSourceReader;
@@ -90,10 +87,12 @@ import org.apache.spark.sql.sources.v2.reader.Statistics;
 import org.apache.spark.sql.sources.v2.reader.SupportsPushDownFilters;
 import org.apache.spark.sql.sources.v2.reader.SupportsPushDownRequiredColumns;
 import org.apache.spark.sql.sources.v2.reader.SupportsReportStatistics;
+import org.apache.spark.sql.types.ArrayType;
 import org.apache.spark.sql.types.BinaryType;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.sql.types.DecimalType;
+import org.apache.spark.sql.types.MapType;
 import org.apache.spark.sql.types.StringType;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
@@ -347,9 +346,9 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
     private Schema lazyTableSchema() {
       if (tableSchema == null) {
-        this.tableSchema = SchemaParser.fromJson(tableSchemaString);
+        this.tableSchema = SchemaParser.fromJson(tableSchemaString).withMetaColumn();
       }
-      return tableSchema;
+      return tableSchema.withMetaColumn();
     }
 
     private Schema lazyExpectedSchema() {
@@ -453,9 +452,15 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
     private Iterator<InternalRow> open(FileScanTask task) {
       DataFile file = task.file();
+      Iterable<DataFile> deletionFiles = task.deletionFiles();
 
       // schema or rows returned by readers
       Schema finalSchema = expectedSchema;
+      Set<Integer> metaColumnIds = new HashSet<>();
+      for (Types.NestedField field : Schema.metaColumns) {
+        metaColumnIds.add(tableSchema.findField(field.name()).fieldId());
+      }
+      Schema metaSchema = TypeUtil.select(tableSchema, metaColumnIds);
       PartitionSpec spec = task.spec();
       Set<Integer> idColumns = spec.identitySourceIds();
 
@@ -470,31 +475,63 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
 
       if (hasJoinedPartitionColumns) {
         // schema used to read data files
-        Schema readSchema = TypeUtil.selectNot(requiredSchema, idColumns);
+        Schema readSchema = TypeUtil.join(
+            TypeUtil.selectNot(TypeUtil.selectNot(requiredSchema, idColumns), metaColumnIds), metaSchema);
         Schema partitionSchema = TypeUtil.select(requiredSchema, idColumns);
         PartitionRowConverter convertToRow = new PartitionRowConverter(partitionSchema, spec);
         JoinedRow joined = new JoinedRow();
 
         InternalRow partition = convertToRow.apply(file.partition());
-        joined.withRight(partition);
+        joined.withLeft(partition);
 
         // create joined rows and project from the joined schema to the final schema
-        iterSchema = TypeUtil.join(readSchema, partitionSchema);
-        iter = Iterators.transform(open(task, readSchema), joined::withLeft);
+        iterSchema = TypeUtil.join(partitionSchema, readSchema);
+        iter = Iterators.transform(open(task, readSchema), joined::withRight);
 
       } else if (hasExtraFilterColumns) {
         // add projection to the final schema
+        requiredSchema = TypeUtil.join(TypeUtil.selectNot(requiredSchema, metaColumnIds), metaSchema);
         iterSchema = requiredSchema;
         iter = open(task, requiredSchema);
 
       } else {
         // return the base iterator
+        finalSchema = TypeUtil.join(TypeUtil.selectNot(requiredSchema, metaColumnIds), metaSchema);
         iterSchema = finalSchema;
         iter = open(task, finalSchema);
       }
 
+      Iterator<InternalRow> finalIter = iter;
+
+      // TODO: this should be abstracted and optimized with merge sort and etc.
+      if (deletionFiles != null && deletionFiles.iterator().hasNext()) {
+        Schema deleteFileSchema = new Schema(Schema.metaColumns);
+        for (DataFile deleteFile : deletionFiles) {
+          CloseableIterable<InternalRow> deleteIter = Parquet.read(fileIo
+              .newInputFile(deleteFile.path().toString()))
+              .project(deleteFileSchema)
+              .createReaderFunc(fileSchema -> SparkParquetReaders.buildReader(deleteFileSchema, fileSchema))
+              .build();
+          finalIter = Iterators.filter(finalIter, row -> {
+            long rowid = row.getLong(row.numFields() - 1);
+            String fileName = row.getString(row.numFields() - 2);
+            fileName = fileName.substring(fileName.lastIndexOf('/'));
+            for (InternalRow deleteRow : deleteIter) {
+              String name = deleteRow.getString(deleteRow.numFields() - 2);
+              name = name.substring(name.lastIndexOf('/'));
+              if (deleteRow.getLong(deleteRow.numFields() - 1) == rowid &&
+                  fileName.equals(name)) {
+                return false;
+              }
+            }
+            return true;
+          });
+        }
+      }
+
+
       // TODO: remove the projection by reporting the iterator's schema back to Spark
-      return Iterators.transform(iter,
+      return Iterators.transform(finalIter,
           APPLY_PROJECTION.bind(projection(finalSchema, iterSchema))::invoke);
     }
 
@@ -660,7 +697,7 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     }
   }
 
-  private static class StructLikeInternalRow implements StructLike {
+  public static class StructLikeInternalRow implements StructLike {
     private final DataType[] types;
     private InternalRow row = null;
 
@@ -685,8 +722,35 @@ class Reader implements DataSourceReader, SupportsPushDownFilters, SupportsPushD
     @Override
     @SuppressWarnings("unchecked")
     public <T> T get(int pos, Class<T> javaClass) {
-      return javaClass.cast(row.get(pos, types[pos]));
+      DataType dataType = types[pos];
+
+      Object obj = row.get(pos, dataType);
+
+      if (obj == null) {
+        return null;
+      }
+
+      if (dataType instanceof StringType) {
+        return javaClass.cast(((UTF8String) obj).toString());
+      } else if (dataType instanceof DecimalType) {
+        return javaClass.cast(((Decimal) obj).toJavaBigDecimal());
+      } else if (dataType instanceof BinaryType) {
+        return javaClass.cast(ByteBuffer.wrap((byte[]) obj));
+      } else if (dataType instanceof StructType) {
+        return javaClass.cast(new StructLikeInternalRow((StructType) dataType).setRow((InternalRow) obj));
+      } else if (dataType instanceof ArrayType) {
+        return javaClass.cast(Lists.newArrayList(
+            ((ArrayData) obj).toObjectArray(((ArrayType) dataType).elementType()))
+        );
+      } else if (dataType instanceof MapType) {
+        Map<Object, Object> map = new HashMap<>();
+        map.put(((MapData) obj).keyArray(), ((MapData) obj).valueArray());
+        return javaClass.cast(map);
+      } else {
+        return javaClass.cast(obj);
+      }
     }
+
 
     @Override
     public <T> void set(int pos, T value) {

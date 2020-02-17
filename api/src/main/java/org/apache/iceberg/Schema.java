@@ -25,6 +25,7 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.Sets;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
@@ -34,6 +35,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.TypeUtil;
+import org.apache.iceberg.types.Types;
 import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.types.Types.StructType;
 
@@ -41,6 +43,11 @@ import org.apache.iceberg.types.Types.StructType;
  * The schema of a data table.
  */
 public class Schema implements Serializable {
+  // TODO: This need to be moved to table specific, and should be generated from engine.
+  public static final NestedField[] metaColumns = {
+      NestedField.optional(1, "_metadata_file_path", Types.StringType.get()),
+      NestedField.optional(2, "_metadata_row_id", Types.LongType.get())};
+
   private static final Joiner NEWLINE = Joiner.on('\n');
   private static final String ALL_COLUMNS = "*";
 
@@ -305,6 +312,43 @@ public class Schema implements Serializable {
     }
 
     return TypeUtil.select(this, selected);
+  }
+
+  public Schema withMetaColumn() {
+    if (findField("_metadata_file_path") == null) {
+      int maxId = 0;
+      for (Integer id : nameToId.values()) {
+        if (id > maxId) {
+          maxId = id;
+        }
+      }
+
+      List<NestedField> newColumns = new ArrayList<>(columns());
+      for (int i = 0; i < metaColumns.length; i++) {
+        newColumns.add(NestedField.optional(maxId + i + 1, metaColumns[i].name(), metaColumns[i].type()));
+      }
+
+      return new Schema(newColumns);
+    } else {
+      return this;
+    }
+  }
+
+  public Schema withoutMetaColumn() {
+    if (findField("_metadata_file_path") == null) {
+      return this;
+    } else {
+      List<NestedField> columnsWithoutMeta = columns().stream().filter(f -> {
+        for (NestedField field : metaColumns) {
+          if (f.name().equals(field.name())) {
+            return false;
+          }
+        }
+        return true;
+      }).collect(Collectors.toList());
+
+      return new Schema(columnsWithoutMeta);
+    }
   }
 
   @Override

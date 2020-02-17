@@ -38,6 +38,9 @@ import org.apache.iceberg.util.ByteBuffers;
 
 class GenericDataFile
     implements DataFile, IndexedRecord, StructLike, SpecificData.SchemaConstructable, Serializable {
+  public static final Integer FILE_AND_POSITION_DELETION_FILE = 1;
+  public static final Integer EQUALITY_DELETION_FILE = 2;
+
   private static final Types.StructType EMPTY_STRUCT_TYPE = Types.StructType.of();
   private static final PartitionData EMPTY_PARTITION_DATA = new PartitionData(EMPTY_STRUCT_TYPE) {
     @Override
@@ -66,6 +69,7 @@ class GenericDataFile
   private List<Long> splitOffsets = null;
   private byte[] keyMetadata = null;
   private Long sequenceNumber = null;
+  private Integer deletionType = null;
 
   // cached schema
   private transient org.apache.avro.Schema avroSchema = null;
@@ -161,6 +165,14 @@ class GenericDataFile
     this.keyMetadata = ByteBuffers.toByteArray(keyMetadata);
   }
 
+  GenericDataFile(String filePath, FileFormat format, PartitionData partition,
+                  long fileSizeInBytes, Metrics metrics,
+                  ByteBuffer keyMetadata, List<Long> splitOffsets, Integer deletionType) {
+    this(filePath, format, partition, fileSizeInBytes, metrics, splitOffsets);
+    this.deletionType = deletionType;
+    this.keyMetadata = ByteBuffers.toByteArray(keyMetadata);
+  }
+
   /**
    * Copy constructor.
    *
@@ -176,6 +188,7 @@ class GenericDataFile
     this.fileSizeInBytes = toCopy.fileSizeInBytes;
     this.fileOrdinal = toCopy.fileOrdinal;
     this.sortColumns = copy(toCopy.sortColumns);
+    this.deletionType = toCopy.deletionType;
     if (fullCopy) {
       // TODO: support lazy conversion to/from map
       this.columnSizes = copy(toCopy.columnSizes);
@@ -277,6 +290,11 @@ class GenericDataFile
   }
 
   @Override
+  public int deletionType() {
+    return deletionType == null ? 0 : 1;
+  }
+
+  @Override
   public org.apache.avro.Schema getSchema() {
     if (avroSchema == null) {
       this.avroSchema = getAvroSchema(partitionType);
@@ -341,6 +359,9 @@ class GenericDataFile
       case 15:
         this.sequenceNumber = (Long) v;
         return;
+      case 16:
+        this.deletionType = (Integer) v;
+        return;
       default:
         // ignore the object, it must be from a newer version of the format
     }
@@ -393,6 +414,8 @@ class GenericDataFile
         return splitOffsets;
       case 15:
         return sequenceNumber;
+      case 16:
+        return deletionType;
       default:
         throw new UnsupportedOperationException("Unknown field ordinal: " + pos);
     }
@@ -412,7 +435,7 @@ class GenericDataFile
 
   @Override
   public int size() {
-    return 15;
+    return 17;
   }
 
   @Override

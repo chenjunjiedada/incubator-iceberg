@@ -19,6 +19,7 @@
 
 package org.apache.iceberg.spark.source;
 
+import avro.shaded.com.google.common.collect.Maps;
 import com.google.common.base.Preconditions;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,7 @@ import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.execution.streaming.StreamExecution;
 import org.apache.spark.sql.sources.DataSourceRegister;
+import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.sources.v2.DataSourceOptions;
 import org.apache.spark.sql.sources.v2.DataSourceV2;
 import org.apache.spark.sql.sources.v2.ReadSupport;
@@ -236,5 +238,17 @@ public class IcebergSource implements DataSourceV2, ReadSupport, WriteSupport, D
     } else {
       return table.io();
     }
+  }
+
+  private SparkTable getSparkTable(String tableName) {
+    Map<String, String> options = Maps.newHashMap();
+    options.put("path", tableName);
+    Configuration conf = new Configuration(lazyBaseConf());
+    Table table = getTableAndResolveHadoopConfiguration(new DataSourceOptions(options), conf);
+    return new SparkTable(lazySparkContext(), table, new DataSourceOptions(options));
+  }
+
+  public void deleteWhere(String tableName, Filter[] filters) {
+    new RowLevelDeleteSupport(getSparkTable(tableName)).deleteWhere(filters);
   }
 }
