@@ -38,7 +38,7 @@ class PositionDeleteFileReader {
   private final InputFile inputFile;
   private final FileFormat format;
 
-  private static final Schema deleteSchema = new Schema(
+  static final Schema deleteSchema = new Schema(
       required(1, "file_path", Types.StringType.get()),
       required(2, "position", Types.LongType.get())
   );
