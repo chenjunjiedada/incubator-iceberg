@@ -36,6 +36,7 @@ import org.apache.iceberg.io.LocationProvider;
 import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.orc.ORC;
 import org.apache.iceberg.parquet.Parquet;
+import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.spark.data.SparkAvroWriter;
 import org.apache.iceberg.spark.data.SparkOrcWriter;
 import org.apache.iceberg.spark.data.SparkParquetWriters;
@@ -85,7 +86,7 @@ public class DeltaWriterFactory {
         switch (fileFormat) {
           case PARQUET:
             return Parquet.write(file)
-                .createWriterFunc(msgType -> SparkParquetWriters.buildWriter(schema, msgType))
+                .createWriterFunc(msgType -> SparkParquetWriters.buildWriter(SparkSchemaUtil.convert(schema), msgType))
                 .setAll(properties)
                 .metricsConfig(metricsConfig)
                 .schema(schema)
@@ -94,7 +95,7 @@ public class DeltaWriterFactory {
 
           case AVRO:
             return Avro.write(file)
-                .createWriterFunc(ignored -> new SparkAvroWriter(schema))
+                .createWriterFunc(ignored -> new SparkAvroWriter(SparkSchemaUtil.convert(schema)))
                 .setAll(properties)
                 .schema(schema)
                 .overwrite()
