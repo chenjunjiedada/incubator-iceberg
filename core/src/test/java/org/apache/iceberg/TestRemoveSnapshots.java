@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.iceberg.ManifestEntry.Status;
+import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
@@ -1043,5 +1044,97 @@ public class TestRemoveSnapshots extends TableTestBase {
         Assert.assertFalse(deletedFiles.contains(item.path().toString()));
       });
     });
+  }
+
+  @Test
+  public void testExpireSnapshotsWhenGarbageCollectionDisabled() {
+    table.updateProperties()
+        .set(TableProperties.GC_ENABLED, "false")
+        .commit();
+
+    table.newAppend()
+        .appendFile(FILE_A)
+        .commit();
+
+    AssertHelpers.assertThrows("Should complain about expiring snapshots",
+        ValidationException.class, "Cannot expire snapshots: GC is disabled",
+        () -> table.expireSnapshots());
+  }
+
+  @Test
+  public void testExpireWithDefaultRetainLast() {
+    table.newAppend()
+        .appendFile(FILE_A)
+        .commit();
+
+    table.newAppend()
+        .appendFile(FILE_B)
+        .commit();
+
+    table.newAppend()
+        .appendFile(FILE_C)
+        .commit();
+
+    Assert.assertEquals("Expected 3 snapshots", 3, Iterables.size(table.snapshots()));
+
+    table.updateProperties()
+        .set(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "3")
+        .commit();
+
+    Set<String> deletedFiles = Sets.newHashSet();
+
+    Snapshot snapshotBeforeExpiration = table.currentSnapshot();
+
+    table.expireSnapshots()
+        .expireOlderThan(System.currentTimeMillis())
+        .deleteWith(deletedFiles::add)
+        .commit();
+
+    Assert.assertEquals("Should not change current snapshot", snapshotBeforeExpiration, table.currentSnapshot());
+    Assert.assertEquals("Should keep 3 snapshots", 3, Iterables.size(table.snapshots()));
+    Assert.assertTrue("Should not delete data", deletedFiles.isEmpty());
+  }
+
+  @Test
+  public void testExpireWithDefaultSnapshotAge() {
+    table.newAppend()
+        .appendFile(FILE_A)
+        .commit();
+    Snapshot firstSnapshot = table.currentSnapshot();
+
+    waitUntilAfter(firstSnapshot.timestampMillis());
+
+    table.newAppend()
+        .appendFile(FILE_B)
+        .commit();
+    Snapshot secondSnapshot = table.currentSnapshot();
+
+    waitUntilAfter(secondSnapshot.timestampMillis());
+
+    table.newAppend()
+        .appendFile(FILE_C)
+        .commit();
+    Snapshot thirdSnapshot = table.currentSnapshot();
+
+    waitUntilAfter(thirdSnapshot.timestampMillis());
+
+    Assert.assertEquals("Expected 3 snapshots", 3, Iterables.size(table.snapshots()));
+
+    table.updateProperties()
+        .set(TableProperties.MAX_SNAPSHOT_AGE_MS, "1")
+        .commit();
+
+    Set<String> deletedFiles = Sets.newHashSet();
+
+    // rely solely on default configs
+    table.expireSnapshots()
+        .deleteWith(deletedFiles::add)
+        .commit();
+
+    Assert.assertEquals("Should not change current snapshot", thirdSnapshot, table.currentSnapshot());
+    Assert.assertEquals("Should keep 1 snapshot", 1, Iterables.size(table.snapshots()));
+    Assert.assertEquals("Should remove expired manifest lists",
+        Sets.newHashSet(firstSnapshot.manifestListLocation(), secondSnapshot.manifestListLocation()),
+        deletedFiles);
   }
 }

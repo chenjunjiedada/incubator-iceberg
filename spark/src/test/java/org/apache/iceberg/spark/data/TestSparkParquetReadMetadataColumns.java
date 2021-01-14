@@ -36,6 +36,7 @@ import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.parquet.Parquet;
 import org.apache.iceberg.parquet.ParquetSchemaUtil;
+import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.spark.SparkSchemaUtil;
 import org.apache.iceberg.spark.data.vectorized.VectorizedSparkParquetReaders;
@@ -48,6 +49,7 @@ import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow;
 import org.apache.spark.sql.types.StructType;
+import org.apache.spark.sql.vectorized.ColumnarBatch;
 import org.apache.spark.unsafe.types.UTF8String;
 import org.junit.Assert;
 import org.junit.Before;
@@ -77,12 +79,13 @@ public class TestSparkParquetReadMetadataColumns {
   private static final List<InternalRow> EXPECTED_ROWS;
   private static final int NUM_ROW_GROUPS = 10;
   private static final int ROWS_PER_SPLIT = NUM_ROWS / NUM_ROW_GROUPS;
+  private static final int RECORDS_PER_BATCH = ROWS_PER_SPLIT / 10;
 
   static {
     DATA_ROWS = Lists.newArrayListWithCapacity(NUM_ROWS);
     for (long i = 0; i < NUM_ROWS; i += 1) {
       InternalRow row = new GenericInternalRow(DATA_SCHEMA.columns().size());
-      if (i >= 500) {
+      if (i >= NUM_ROWS / 2) {
         row.update(0, 2 * i);
       } else {
         row.update(0, i);
@@ -94,7 +97,7 @@ public class TestSparkParquetReadMetadataColumns {
     EXPECTED_ROWS = Lists.newArrayListWithCapacity(NUM_ROWS);
     for (long i = 0; i < NUM_ROWS; i += 1) {
       InternalRow row = new GenericInternalRow(PROJECTION_SCHEMA.columns().size());
-      if (i >= 500) {
+      if (i >= NUM_ROWS / 2) {
         row.update(0, 2 * i);
       } else {
         row.update(0, i);
@@ -106,17 +109,17 @@ public class TestSparkParquetReadMetadataColumns {
   }
 
   @Parameterized.Parameters(name =  "vectorized = {0}")
-  // Vectorized parquet reads not currently supported for reads on tables
-  // with row position stored in the metadata column.
-  // https://github.com/apache/iceberg/issues/1540
-  public static Object[] parameters() {
-    return new Object[] { false };
+  public static Object[][] parameters() {
+    return new Object[][] {
+        new Object[] { false },
+        new Object[] { true }
+    };
   }
 
   @Rule
   public TemporaryFolder temp = new TemporaryFolder();
 
-  private boolean vectorized;
+  private final boolean vectorized;
   private File testFile;
 
   public TestSparkParquetReadMetadataColumns(boolean vectorized) {
@@ -165,11 +168,11 @@ public class TestSparkParquetReadMetadataColumns {
     // current iceberg supports row group filter.
     for (int i = 1; i < 5; i += 1) {
       readAndValidate(
-          Expressions.and(Expressions.lessThan("id", 500),
+          Expressions.and(Expressions.lessThan("id", NUM_ROWS / 2),
               Expressions.greaterThanOrEqual("id", i * ROWS_PER_SPLIT)),
           null,
           null,
-          EXPECTED_ROWS.subList(i * ROWS_PER_SPLIT, 500));
+          EXPECTED_ROWS.subList(i * ROWS_PER_SPLIT, NUM_ROWS / 2));
     }
   }
 
@@ -194,6 +197,7 @@ public class TestSparkParquetReadMetadataColumns {
     if (vectorized) {
       builder.createBatchedReaderFunc(fileSchema -> VectorizedSparkParquetReaders.buildReader(PROJECTION_SCHEMA,
           fileSchema, NullCheckingForGet.NULL_CHECKING_ENABLED));
+      builder.recordsPerBatch(RECORDS_PER_BATCH);
     } else {
       builder = builder.createReaderFunc(msgType -> SparkParquetReaders.buildReader(PROJECTION_SCHEMA, msgType));
     }
@@ -206,7 +210,7 @@ public class TestSparkParquetReadMetadataColumns {
       builder = builder.split(splitStart, splitLength);
     }
 
-    try (CloseableIterable<InternalRow> reader = builder.build()) {
+    try (CloseableIterable<InternalRow> reader = vectorized ? batchesToRows(builder.build()) : builder.build()) {
       final Iterator<InternalRow> actualRows = reader.iterator();
 
       for (InternalRow internalRow : expected) {
@@ -216,5 +220,11 @@ public class TestSparkParquetReadMetadataColumns {
 
       Assert.assertFalse("Should not have extra rows", actualRows.hasNext());
     }
+  }
+
+  private CloseableIterable<InternalRow> batchesToRows(CloseableIterable<ColumnarBatch> batches) {
+    return CloseableIterable.combine(
+        Iterables.concat(Iterables.transform(batches, b -> (Iterable<InternalRow>) b::rowIterator)),
+        batches);
   }
 }

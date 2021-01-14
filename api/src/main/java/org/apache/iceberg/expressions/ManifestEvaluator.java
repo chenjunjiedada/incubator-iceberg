@@ -48,6 +48,8 @@ import static org.apache.iceberg.expressions.Expressions.rewriteNot;
  * return value of {@code eval} is false.
  */
 public class ManifestEvaluator {
+  private static final int IN_PREDICATE_LIMIT = 200;
+
   private final StructType struct;
   private final Expression expr;
 
@@ -132,11 +134,28 @@ public class ManifestEvaluator {
       int pos = Accessors.toPosition(ref.accessor());
       // containsNull encodes whether at least one partition value is null, lowerBound is null if
       // all partition values are null.
-      ByteBuffer lowerBound = stats.get(pos).lowerBound();
-      if (lowerBound == null) {
+      if (stats.get(pos).containsNull() && stats.get(pos).lowerBound() == null) {
         return ROWS_CANNOT_MATCH; // all values are null
       }
 
+      return ROWS_MIGHT_MATCH;
+    }
+
+    @Override
+    public <T> Boolean isNaN(BoundReference<T> ref) {
+      int pos = Accessors.toPosition(ref.accessor());
+      // containsNull encodes whether at least one partition value is null, lowerBound is null if
+      // all partition values are null.
+      if (stats.get(pos).containsNull() && stats.get(pos).lowerBound() == null) {
+        return ROWS_CANNOT_MATCH; // all values are null
+      }
+
+      return ROWS_MIGHT_MATCH;
+    }
+
+    @Override
+    public <T> Boolean notNaN(BoundReference<T> ref) {
+      // we don't have enough information to tell if there is no NaN value
       return ROWS_MIGHT_MATCH;
     }
 
@@ -251,6 +270,11 @@ public class ManifestEvaluator {
       }
 
       Collection<T> literals = literalSet;
+
+      if (literals.size() > IN_PREDICATE_LIMIT) {
+        // skip evaluating the predicate if the number of values is too big
+        return ROWS_MIGHT_MATCH;
+      }
 
       T lower = Conversions.fromByteBuffer(ref.type(), fieldStats.lowerBound());
       literals = literals.stream().filter(v -> ref.comparator().compare(lower, v) <= 0).collect(Collectors.toList());

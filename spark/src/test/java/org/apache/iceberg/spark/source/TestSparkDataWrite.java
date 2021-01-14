@@ -34,10 +34,12 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.hadoop.HadoopTables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.spark.SparkWriteOptions;
 import org.apache.iceberg.types.Types;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Encoders;
 import org.apache.spark.sql.Row;
+import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
 import org.junit.AfterClass;
 import org.junit.Assert;
@@ -49,6 +51,7 @@ import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
+import static org.apache.iceberg.TableProperties.SPARK_WRITE_PARTITIONED_FANOUT_ENABLED;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 
 @RunWith(Parameterized.class)
@@ -104,8 +107,8 @@ public abstract class TestSparkDataWrite {
     // TODO: incoming columns must be ordered according to the table's schema
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     table.refresh();
@@ -164,14 +167,14 @@ public abstract class TestSparkDataWrite {
 
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     df.withColumn("id", df.col("id").plus(3)).select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     table.refresh();
@@ -212,15 +215,15 @@ public abstract class TestSparkDataWrite {
 
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     // overwrite with 2*id to replace record 2, append 4 and 6
     df.withColumn("id", df.col("id").multiply(2)).select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("overwrite")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Overwrite)
         .option("overwrite-mode", "dynamic")
         .save(location.toString());
 
@@ -254,15 +257,15 @@ public abstract class TestSparkDataWrite {
 
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     // overwrite with the same data; should not produce two copies
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("overwrite")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Overwrite)
         .save(location.toString());
 
     table.refresh();
@@ -298,8 +301,8 @@ public abstract class TestSparkDataWrite {
 
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     table.refresh();
@@ -327,51 +330,17 @@ public abstract class TestSparkDataWrite {
 
   @Test
   public void testPartitionedCreateWithTargetFileSizeViaOption() throws IOException {
-    File parent = temp.newFolder(format.toString());
-    File location = new File(parent, "test");
+    partitionedCreateWithTargetFileSizeViaOption(IcebergOptionsType.NONE);
+  }
 
-    HadoopTables tables = new HadoopTables(CONF);
-    PartitionSpec spec = PartitionSpec.builderFor(SCHEMA).identity("data").build();
-    Table table = tables.create(SCHEMA, spec, location.toString());
+  @Test
+  public void testPartitionedFanoutCreateWithTargetFileSizeViaOption() throws IOException {
+    partitionedCreateWithTargetFileSizeViaOption(IcebergOptionsType.TABLE);
+  }
 
-    List<SimpleRecord> expected = Lists.newArrayListWithCapacity(8000);
-    for (int i = 0; i < 2000; i++) {
-      expected.add(new SimpleRecord(i, "a"));
-      expected.add(new SimpleRecord(i, "b"));
-      expected.add(new SimpleRecord(i, "c"));
-      expected.add(new SimpleRecord(i, "d"));
-    }
-
-    Dataset<Row> df = spark.createDataFrame(expected, SimpleRecord.class);
-
-    df.select("id", "data").sort("data").write()
-        .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
-        .option("target-file-size-bytes", 4) // ~4 bytes; low enough to trigger
-        .save(location.toString());
-
-    table.refresh();
-
-    Dataset<Row> result = spark.read()
-        .format("iceberg")
-        .load(location.toString());
-
-    List<SimpleRecord> actual = result.orderBy("id").as(Encoders.bean(SimpleRecord.class)).collectAsList();
-    Assert.assertEquals("Number of rows should match", expected.size(), actual.size());
-    Assert.assertEquals("Result rows should match", expected, actual);
-
-    List<DataFile> files = Lists.newArrayList();
-    for (ManifestFile manifest : table.currentSnapshot().allManifests()) {
-      for (DataFile file : ManifestFiles.read(manifest, table.io())) {
-        files.add(file);
-      }
-    }
-    // TODO: ORC file now not support target file size
-    if (!format.equals(FileFormat.ORC)) {
-      Assert.assertEquals("Should have 8 DataFiles", 8, files.size());
-      Assert.assertTrue("All DataFiles contain 1000 rows", files.stream().allMatch(d -> d.recordCount() == 1000));
-    }
+  @Test
+  public void testPartitionedFanoutCreateWithTargetFileSizeViaOption2() throws IOException {
+    partitionedCreateWithTargetFileSizeViaOption(IcebergOptionsType.JOB);
   }
 
   @Test
@@ -397,8 +366,8 @@ public abstract class TestSparkDataWrite {
 
     df.select("id").write() // select only id column
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     table.refresh();
@@ -440,8 +409,8 @@ public abstract class TestSparkDataWrite {
 
     df.select("c1", "c3").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     table.refresh();
@@ -474,8 +443,8 @@ public abstract class TestSparkDataWrite {
 
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     Dataset<Row> query = spark.read()
@@ -493,8 +462,8 @@ public abstract class TestSparkDataWrite {
 
     df.select("id", "data").write()
         .format("iceberg")
-        .option("write-format", format.toString())
-        .mode("append")
+        .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+        .mode(SaveMode.Append)
         .save(location.toString());
 
     List<SimpleRecord> actual2 = spark.table("tmp").as(Encoders.bean(SimpleRecord.class)).collectAsList();
@@ -504,5 +473,84 @@ public abstract class TestSparkDataWrite {
     );
     Assert.assertEquals("Number of rows should match", expected2.size(), actual2.size());
     Assert.assertEquals("Result rows should match", expected2, actual2);
+  }
+
+  public void partitionedCreateWithTargetFileSizeViaOption(IcebergOptionsType option)
+      throws IOException {
+    File parent = temp.newFolder(format.toString());
+    File location = new File(parent, "test");
+
+    HadoopTables tables = new HadoopTables(CONF);
+    PartitionSpec spec = PartitionSpec.builderFor(SCHEMA).identity("data").build();
+    Table table = tables.create(SCHEMA, spec, location.toString());
+
+    List<SimpleRecord> expected = Lists.newArrayListWithCapacity(8000);
+    for (int i = 0; i < 2000; i++) {
+      expected.add(new SimpleRecord(i, "a"));
+      expected.add(new SimpleRecord(i, "b"));
+      expected.add(new SimpleRecord(i, "c"));
+      expected.add(new SimpleRecord(i, "d"));
+    }
+
+    Dataset<Row> df = spark.createDataFrame(expected, SimpleRecord.class);
+
+    switch (option) {
+      case NONE:
+        df.select("id", "data").sort("data").write()
+            .format("iceberg")
+            .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+            .mode(SaveMode.Append)
+            .option(SparkWriteOptions.TARGET_FILE_SIZE_BYTES, 4) // ~4 bytes; low enough to trigger
+            .save(location.toString());
+        break;
+      case TABLE:
+        table.updateProperties().set(SPARK_WRITE_PARTITIONED_FANOUT_ENABLED, "true").commit();
+        df.select("id", "data").write()
+            .format("iceberg")
+            .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+            .mode(SaveMode.Append)
+            .option(SparkWriteOptions.TARGET_FILE_SIZE_BYTES, 4) // ~4 bytes; low enough to trigger
+            .save(location.toString());
+        break;
+      case JOB:
+        df.select("id", "data").write()
+            .format("iceberg")
+            .option(SparkWriteOptions.WRITE_FORMAT, format.toString())
+            .mode(SaveMode.Append)
+            .option(SparkWriteOptions.TARGET_FILE_SIZE_BYTES, 4) // ~4 bytes; low enough to trigger
+            .option(SparkWriteOptions.FANOUT_ENABLED, true)
+            .save(location.toString());
+        break;
+      default:
+        break;
+    }
+
+    table.refresh();
+
+    Dataset<Row> result = spark.read()
+        .format("iceberg")
+        .load(location.toString());
+
+    List<SimpleRecord> actual = result.orderBy("id").as(Encoders.bean(SimpleRecord.class)).collectAsList();
+    Assert.assertEquals("Number of rows should match", expected.size(), actual.size());
+    Assert.assertEquals("Result rows should match", expected, actual);
+
+    List<DataFile> files = Lists.newArrayList();
+    for (ManifestFile manifest : table.currentSnapshot().allManifests()) {
+      for (DataFile file : ManifestFiles.read(manifest, table.io())) {
+        files.add(file);
+      }
+    }
+    // TODO: ORC file now not support target file size
+    if (!format.equals(FileFormat.ORC)) {
+      Assert.assertEquals("Should have 8 DataFiles", 8, files.size());
+      Assert.assertTrue("All DataFiles contain 1000 rows", files.stream().allMatch(d -> d.recordCount() == 1000));
+    }
+  }
+
+  public enum IcebergOptionsType {
+    NONE,
+    TABLE,
+    JOB
   }
 }

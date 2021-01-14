@@ -53,7 +53,6 @@ class ExpressionToSearchArgument extends ExpressionVisitors.BoundVisitor<Express
 
   // Currently every predicate in ORC requires a PredicateLeaf.Type field which is not available for these Iceberg types
   private static final Set<TypeID> UNSUPPORTED_TYPES = ImmutableSet.of(
-      TypeID.TIMESTAMP, // Temporarily disable filters on Timestamp columns due to ORC-611
       TypeID.BINARY,
       TypeID.FIXED,
       TypeID.UUID,
@@ -121,6 +120,37 @@ class ExpressionToSearchArgument extends ExpressionVisitors.BoundVisitor<Express
         .isNull(idToColumnName.get(expr.ref().fieldId()),
             type(expr.ref().type()))
         .end();
+  }
+
+  @Override
+  public <T> Action isNaN(Bound<T> expr) {
+    return () -> this.builder.equals(
+        idToColumnName.get(expr.ref().fieldId()),
+        type(expr.ref().type()),
+        literal(expr.ref().type(), getNaNForType(expr.ref().type())));
+  }
+
+  private Object getNaNForType(Type type) {
+    switch (type.typeId()) {
+      case FLOAT:
+        return Float.NaN;
+      case DOUBLE:
+        return Double.NaN;
+      default:
+        throw new IllegalArgumentException("Cannot get NaN value for type " + type.typeId());
+    }
+  }
+
+  @Override
+  public <T> Action notNaN(Bound<T> expr) {
+    return () -> {
+      this.builder.startOr();
+      isNull(expr).invoke();
+      this.builder.startNot();
+      isNaN(expr).invoke();
+      this.builder.end(); // end NOT
+      this.builder.end(); // end OR
+    };
   }
 
   @Override

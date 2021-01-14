@@ -235,7 +235,7 @@ public class SnapshotManager extends MergingSnapshotProducer<ManageSnapshots> im
   }
 
   private static void validateCurrentSnapshot(TableMetadata meta, Long requiredSnapshotId) {
-    if (requiredSnapshotId != null) {
+    if (requiredSnapshotId != null && meta.currentSnapshot() != null) {
       ValidationException.check(meta.currentSnapshot().snapshotId() == requiredSnapshotId,
           "Cannot fast-forward to non-append snapshot; current has changed: current=%s != required=%s",
           meta.currentSnapshot().snapshotId(), requiredSnapshotId);
@@ -255,7 +255,7 @@ public class SnapshotManager extends MergingSnapshotProducer<ManageSnapshots> im
 
   private static void validateReplacedPartitions(TableMetadata meta, Long parentId,
                                                  PartitionSet replacedPartitions) {
-    if (replacedPartitions != null) {
+    if (replacedPartitions != null && meta.currentSnapshot() != null) {
       ValidationException.check(parentId == null || isCurrentAncestor(meta, parentId),
           "Cannot cherry-pick overwrite, based on non-ancestor of the current state: %s", parentId);
       List<DataFile> newFiles = SnapshotUtil.newFiles(parentId, meta.currentSnapshot().snapshotId(), meta::snapshot);

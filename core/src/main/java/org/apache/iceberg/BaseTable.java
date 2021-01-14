@@ -119,9 +119,18 @@ public class BaseTable implements Table, HasTableOperations {
     return new SchemaUpdate(ops);
   }
 
+  public UpdatePartitionSpec updateSpec() {
+    return new BaseUpdatePartitionSpec(ops);
+  }
+
   @Override
   public UpdateProperties updateProperties() {
     return new PropertiesUpdate(ops);
+  }
+
+  @Override
+  public ReplaceSortOrder replaceSortOrder() {
+    return new BaseReplaceSortOrder(ops);
   }
 
   @Override

@@ -311,16 +311,18 @@ public class TestHelpers {
     private final long recordCount;
     private final Map<Integer, Long> valueCounts;
     private final Map<Integer, Long> nullValueCounts;
+    private final Map<Integer, Long> nanValueCounts;
     private final Map<Integer, ByteBuffer> lowerBounds;
     private final Map<Integer, ByteBuffer> upperBounds;
 
     public TestDataFile(String path, StructLike partition, long recordCount) {
-      this(path, partition, recordCount, null, null, null, null);
+      this(path, partition, recordCount, null, null, null, null, null);
     }
 
     public TestDataFile(String path, StructLike partition, long recordCount,
                         Map<Integer, Long> valueCounts,
                         Map<Integer, Long> nullValueCounts,
+                        Map<Integer, Long> nanValueCounts,
                         Map<Integer, ByteBuffer> lowerBounds,
                         Map<Integer, ByteBuffer> upperBounds) {
       this.path = path;
@@ -328,8 +330,14 @@ public class TestHelpers {
       this.recordCount = recordCount;
       this.valueCounts = valueCounts;
       this.nullValueCounts = nullValueCounts;
+      this.nanValueCounts = nanValueCounts;
       this.lowerBounds = lowerBounds;
       this.upperBounds = upperBounds;
+    }
+
+    @Override
+    public Long pos() {
+      return null;
     }
 
     @Override
@@ -375,6 +383,11 @@ public class TestHelpers {
     @Override
     public Map<Integer, Long> nullValueCounts() {
       return nullValueCounts;
+    }
+
+    @Override
+    public Map<Integer, Long> nanValueCounts() {
+      return nanValueCounts;
     }
 
     @Override

@@ -47,6 +47,8 @@ import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.PrimitiveType;
 
 public class ParquetMetricsRowGroupFilter {
+  private static final int IN_PREDICATE_LIMIT = 200;
+
   private final Schema schema;
   private final Expression expr;
 
@@ -171,6 +173,30 @@ public class ParquetMetricsRowGroupFilter {
         return ROWS_CANNOT_MATCH;
       }
 
+      return ROWS_MIGHT_MATCH;
+    }
+
+    @Override
+    public <T> Boolean isNaN(BoundReference<T> ref) {
+      int id = ref.fieldId();
+
+      Long valueCount = valueCounts.get(id);
+      if (valueCount == null) {
+        // the column is not present and is all nulls
+        return ROWS_CANNOT_MATCH;
+      }
+
+      Statistics<?> colStats = stats.get(id);
+      if (colStats != null && valueCount - colStats.getNumNulls() == 0) {
+        // (num nulls == value count) => all values are null => no nan values
+        return ROWS_CANNOT_MATCH;
+      }
+
+      return ROWS_MIGHT_MATCH;
+    }
+
+    @Override
+    public <T> Boolean notNaN(BoundReference<T> ref) {
       return ROWS_MIGHT_MATCH;
     }
 
@@ -372,6 +398,11 @@ public class ParquetMetricsRowGroupFilter {
         }
 
         Collection<T> literals = literalSet;
+
+        if (literals.size() > IN_PREDICATE_LIMIT) {
+          // skip evaluating the predicate if the number of values is too big
+          return ROWS_MIGHT_MATCH;
+        }
 
         T lower = min(colStats, id);
         literals = literals.stream().filter(v -> ref.comparator().compare(lower, v) <= 0).collect(Collectors.toList());

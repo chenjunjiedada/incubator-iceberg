@@ -103,11 +103,27 @@ class BaseTransaction implements Transaction {
   }
 
   @Override
+  public UpdatePartitionSpec updateSpec() {
+    checkLastOperationCommitted("UpdateSpec");
+    UpdatePartitionSpec partitionSpecChange = new BaseUpdatePartitionSpec(transactionOps);
+    updates.add(partitionSpecChange);
+    return partitionSpecChange;
+  }
+
+  @Override
   public UpdateProperties updateProperties() {
     checkLastOperationCommitted("UpdateProperties");
     UpdateProperties props = new PropertiesUpdate(transactionOps);
     updates.add(props);
     return props;
+  }
+
+  @Override
+  public ReplaceSortOrder replaceSortOrder() {
+    checkLastOperationCommitted("ReplaceSortOrder");
+    ReplaceSortOrder replaceSortOrder = new BaseReplaceSortOrder(transactionOps);
+    updates.add(replaceSortOrder);
+    return replaceSortOrder;
   }
 
   @Override
@@ -560,8 +576,18 @@ class BaseTransaction implements Transaction {
     }
 
     @Override
+    public UpdatePartitionSpec updateSpec() {
+      return BaseTransaction.this.updateSpec();
+    }
+
+    @Override
     public UpdateProperties updateProperties() {
       return BaseTransaction.this.updateProperties();
+    }
+
+    @Override
+    public ReplaceSortOrder replaceSortOrder() {
+      return BaseTransaction.this.replaceSortOrder();
     }
 
     @Override

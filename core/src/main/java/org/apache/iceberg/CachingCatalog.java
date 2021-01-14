@@ -22,12 +22,14 @@ package org.apache.iceberg;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.AlreadyExistsException;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 
 public class CachingCatalog implements Catalog {
   public static Catalog wrap(Catalog catalog) {
@@ -97,49 +99,150 @@ public class CachingCatalog implements Catalog {
   @Override
   public Table createTable(TableIdentifier ident, Schema schema, PartitionSpec spec, String location,
                            Map<String, String> properties) {
-    AtomicBoolean created = new AtomicBoolean(false);
-    Table table = tableCache.get(canonicalizeIdentifier(ident), identifier -> {
-      created.set(true);
-      return catalog.createTable(identifier, schema, spec, location, properties);
-    });
-
-    if (!created.get()) {
-      throw new AlreadyExistsException("Table already exists: %s", ident);
-    }
-
-    return table;
+    return buildTable(ident, schema)
+        .withPartitionSpec(spec)
+        .withLocation(location)
+        .withProperties(properties)
+        .create();
   }
 
   @Override
   public Transaction newCreateTableTransaction(TableIdentifier ident, Schema schema, PartitionSpec spec,
                                                String location, Map<String, String> properties) {
-    // create a new transaction without altering the cache. the table doesn't exist until the transaction is committed.
-    // if the table is created before the transaction commits, any cached version is correct and the transaction create
-    // will fail. if the transaction commits before another create, then the cache will be empty.
-    return catalog.newCreateTableTransaction(ident, schema, spec, location, properties);
+    return buildTable(ident, schema)
+        .withPartitionSpec(spec)
+        .withLocation(location)
+        .withProperties(properties)
+        .createTransaction();
   }
 
   @Override
   public Transaction newReplaceTableTransaction(TableIdentifier ident, Schema schema, PartitionSpec spec,
                                                 String location, Map<String, String> properties, boolean orCreate) {
-    // create a new transaction without altering the cache. the table doesn't change until the transaction is committed.
-    // when the transaction commits, invalidate the table in the cache if it is present.
-    return CommitCallbackTransaction.addCallback(
-        catalog.newReplaceTableTransaction(ident, schema, spec, location, properties, orCreate),
-        () -> tableCache.invalidate(canonicalizeIdentifier(ident)));
+    TableBuilder builder = buildTable(ident, schema)
+        .withPartitionSpec(spec)
+        .withLocation(location)
+        .withProperties(properties);
+    if (orCreate) {
+      return builder.createOrReplaceTransaction();
+    } else {
+      return builder.replaceTransaction();
+    }
   }
 
   @Override
   public boolean dropTable(TableIdentifier ident, boolean purge) {
     boolean dropped = catalog.dropTable(ident, purge);
-    tableCache.invalidate(canonicalizeIdentifier(ident));
+    invalidate(canonicalizeIdentifier(ident));
     return dropped;
   }
 
   @Override
   public void renameTable(TableIdentifier from, TableIdentifier to) {
     catalog.renameTable(from, to);
-    tableCache.invalidate(canonicalizeIdentifier(from));
+    invalidate(canonicalizeIdentifier(from));
   }
 
+  private void invalidate(TableIdentifier ident) {
+    tableCache.invalidate(ident);
+    tableCache.invalidateAll(metadataTableIdentifiers(ident));
+  }
+
+  private Iterable<TableIdentifier> metadataTableIdentifiers(TableIdentifier ident) {
+    ImmutableList.Builder<TableIdentifier> builder = ImmutableList.builder();
+
+    for (MetadataTableType type : MetadataTableType.values()) {
+      // metadata table resolution is case insensitive right now
+      builder.add(TableIdentifier.parse(ident + "." + type.name()));
+      builder.add(TableIdentifier.parse(ident + "." + type.name().toLowerCase(Locale.ROOT)));
+    }
+
+    return builder.build();
+  }
+
+  @Override
+  public TableBuilder buildTable(TableIdentifier identifier, Schema schema) {
+    return new CachingTableBuilder(identifier, schema);
+  }
+
+  private class CachingTableBuilder implements TableBuilder {
+    private final TableIdentifier ident;
+    private final TableBuilder innerBuilder;
+
+    private CachingTableBuilder(TableIdentifier identifier, Schema schema) {
+      this.innerBuilder = catalog.buildTable(identifier, schema);
+      this.ident = identifier;
+    }
+
+    @Override
+    public TableBuilder withPartitionSpec(PartitionSpec spec) {
+      innerBuilder.withPartitionSpec(spec);
+      return this;
+    }
+
+    @Override
+    public TableBuilder withSortOrder(SortOrder sortOrder) {
+      innerBuilder.withSortOrder(sortOrder);
+      return this;
+    }
+
+    @Override
+    public TableBuilder withLocation(String location) {
+      innerBuilder.withLocation(location);
+      return this;
+    }
+
+    @Override
+    public TableBuilder withProperties(Map<String, String> properties) {
+      innerBuilder.withProperties(properties);
+      return this;
+    }
+
+    @Override
+    public TableBuilder withProperty(String key, String value) {
+      innerBuilder.withProperty(key, value);
+      return this;
+    }
+
+    @Override
+    public Table create() {
+      AtomicBoolean created = new AtomicBoolean(false);
+      Table table = tableCache.get(canonicalizeIdentifier(ident), identifier -> {
+        created.set(true);
+        return innerBuilder.create();
+      });
+
+      if (!created.get()) {
+        throw new AlreadyExistsException("Table already exists: %s", ident);
+      }
+
+      return table;
+    }
+
+    @Override
+    public Transaction createTransaction() {
+      // create a new transaction without altering the cache. the table doesn't exist until the transaction is
+      // committed. if the table is created before the transaction commits, any cached version is correct and the
+      // transaction create will fail. if the transaction commits before another create, then the cache will be empty.
+      return innerBuilder.createTransaction();
+    }
+
+    @Override
+    public Transaction replaceTransaction() {
+      // create a new transaction without altering the cache. the table doesn't change until the transaction is
+      // committed. when the transaction commits, invalidate the table in the cache if it is present.
+      return CommitCallbackTransaction.addCallback(
+          innerBuilder.replaceTransaction(),
+          () -> invalidate(canonicalizeIdentifier(ident)));
+    }
+
+    @Override
+    public Transaction createOrReplaceTransaction() {
+      // create a new transaction without altering the cache. the table doesn't change until the transaction is
+      // committed. when the transaction commits, invalidate the table in the cache if it is present.
+      return CommitCallbackTransaction.addCallback(
+          innerBuilder.createOrReplaceTransaction(),
+          () -> invalidate(canonicalizeIdentifier(ident)));
+    }
+  }
 }

@@ -108,8 +108,18 @@ abstract class BaseMetadataTable implements Table {
   }
 
   @Override
+  public UpdatePartitionSpec updateSpec() {
+    throw new UnsupportedOperationException("Cannot update the partition spec of a metadata table");
+  }
+
+  @Override
   public UpdateProperties updateProperties() {
     throw new UnsupportedOperationException("Cannot update the properties of a metadata table");
+  }
+
+  @Override
+  public ReplaceSortOrder replaceSortOrder() {
+    throw new UnsupportedOperationException("Cannot update the sort order of a metadata table");
   }
 
   @Override

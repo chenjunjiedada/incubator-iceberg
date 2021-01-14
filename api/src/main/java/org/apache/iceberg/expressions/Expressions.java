@@ -120,7 +120,23 @@ public class Expressions {
   }
 
   public static <T> UnboundPredicate<T> notNull(UnboundTerm<T> expr) {
-    return new UnboundPredicate<>(Expression.Operation.IS_NULL, expr);
+    return new UnboundPredicate<>(Expression.Operation.NOT_NULL, expr);
+  }
+
+  public static <T> UnboundPredicate<T> isNaN(String name) {
+    return new UnboundPredicate<>(Expression.Operation.IS_NAN, ref(name));
+  }
+
+  public static <T> UnboundPredicate<T> isNaN(UnboundTerm<T> expr) {
+    return new UnboundPredicate<>(Expression.Operation.IS_NAN, expr);
+  }
+
+  public static <T> UnboundPredicate<T> notNaN(String name) {
+    return new UnboundPredicate<>(Expression.Operation.NOT_NAN, ref(name));
+  }
+
+  public static <T> UnboundPredicate<T> notNaN(UnboundTerm<T> expr) {
+    return new UnboundPredicate<>(Expression.Operation.NOT_NAN, expr);
   }
 
   public static <T> UnboundPredicate<T> lessThan(String name, T value) {
@@ -220,7 +236,8 @@ public class Expressions {
   }
 
   public static <T> UnboundPredicate<T> predicate(Operation op, String name, Literal<T> lit) {
-    Preconditions.checkArgument(op != Operation.IS_NULL && op != Operation.NOT_NULL,
+    Preconditions.checkArgument(
+        op != Operation.IS_NULL && op != Operation.NOT_NULL && op != Operation.IS_NAN && op != Operation.NOT_NAN,
         "Cannot create %s predicate inclusive a value", op);
     return new UnboundPredicate<T>(op, ref(name), lit);
   }
@@ -230,7 +247,8 @@ public class Expressions {
   }
 
   public static <T> UnboundPredicate<T> predicate(Operation op, String name) {
-    Preconditions.checkArgument(op == Operation.IS_NULL || op == Operation.NOT_NULL,
+    Preconditions.checkArgument(
+        op == Operation.IS_NULL || op == Operation.NOT_NULL || op == Operation.IS_NAN || op == Operation.NOT_NAN,
         "Cannot create %s predicate without a value", op);
     return new UnboundPredicate<>(op, ref(name));
   }
@@ -262,5 +280,17 @@ public class Expressions {
    */
   public static <T> NamedReference<T> ref(String name) {
     return new NamedReference<>(name);
+  }
+
+  /**
+   * Constructs a transform expression for a given column.
+   *
+   * @param name a column name
+   * @param transform a transform function
+   * @param <T> the Java type of this term
+   * @return an unbound transform expression
+   */
+  public static <T> UnboundTerm<T> transform(String name, Transform<?, T> transform) {
+    return new UnboundTransform<>(ref(name), transform);
   }
 }

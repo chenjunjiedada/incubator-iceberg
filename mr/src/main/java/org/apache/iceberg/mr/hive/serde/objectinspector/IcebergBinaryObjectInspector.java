@@ -28,12 +28,17 @@ import org.apache.hadoop.io.BytesWritable;
 import org.apache.iceberg.util.ByteBuffers;
 
 public abstract class IcebergBinaryObjectInspector extends AbstractPrimitiveJavaObjectInspector
-                                                   implements BinaryObjectInspector {
+    implements BinaryObjectInspector, WriteObjectInspector {
 
   private static final IcebergBinaryObjectInspector BYTE_ARRAY = new IcebergBinaryObjectInspector() {
     @Override
     byte[] toByteArray(Object o) {
       return (byte[]) o;
+    }
+
+    @Override
+    public byte[] convert(Object o) {
+      return o == null ? null : ((BytesWritable) o).getBytes();
     }
   };
 
@@ -41,6 +46,11 @@ public abstract class IcebergBinaryObjectInspector extends AbstractPrimitiveJava
     @Override
     byte[] toByteArray(Object o) {
       return ByteBuffers.toByteArray((ByteBuffer) o);
+    }
+
+    @Override
+    public ByteBuffer convert(Object o) {
+      return o == null ? null : ByteBuffer.wrap(((BytesWritable) o).getBytes());
     }
   };
 
@@ -73,9 +83,16 @@ public abstract class IcebergBinaryObjectInspector extends AbstractPrimitiveJava
     if (o == null) {
       return null;
     }
-
-    byte[] bytes = (byte[]) o;
-    return Arrays.copyOf(bytes, bytes.length);
+    if (o instanceof byte[]) {
+      byte[] bytes = (byte[]) o;
+      return Arrays.copyOf(bytes, bytes.length);
+    } else if (o instanceof ByteBuffer) {
+      ByteBuffer copy = ByteBuffer.wrap(((ByteBuffer) o).array(), ((ByteBuffer) o).arrayOffset(),
+              ((ByteBuffer) o).limit());
+      return copy;
+    } else {
+      return o;
+    }
   }
 
 }

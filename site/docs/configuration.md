@@ -17,6 +17,24 @@
 
 # Configuration
 
+## Catalog properties
+
+Iceberg catalogs support using catalog properties to configure catalog behaviors. Here is a list of commonly used catalog properties:
+
+| Property                          | Default            | Description                                            |
+| --------------------------------- | ------------------ | ------------------------------------------------------ |
+| catalog-impl                      | null               | a custom `Catalog` implementation to use by an engine  |
+| io-impl                           | null               | a custom `FileIO` implementation to use in a catalog   |
+| warehouse                         | null               | the root path of the data warehouse                    |
+| uri                               | null               | (Hive catalog only) the Hive metastore URI             |
+| clients                           | 2                  | (Hive catalog only) the Hive client pool size          |
+
+`HadoopCatalog` and `HiveCatalog` can access the properties in their constructors.
+Any other custom catalog can access the properties by implementing `Catalog.initialize(catalogName, catalogProperties)`.
+The properties can be manually constructed or passed in from a compute engine like Spark or Flink.
+Spark uses its session properties as catalog properties, see more details in the [Spark configuration](#spark-configuration) section.
+Flink passes in catalog properties through `CREATE CATALOG` statement, see more details in the [Flink](../flink/#creating-catalogs-and-using-catalogs) section.
+
 ## Table properties
 
 Iceberg tables support table properties to configure table behavior, like the default split size for readers.
@@ -50,6 +68,7 @@ Iceberg tables support table properties to configure table behavior, like the de
 | write.summary.partition-limit      | 0                  | Includes partition-level summary stats in snapshot summaries if the changed partition count is less than this limit |
 | write.metadata.delete-after-commit.enabled | false      | Controls whether to delete the oldest version metadata files after commit |
 | write.metadata.previous-versions-max       | 100        | The max number of previous version metadata files to keep before deleting after commit |
+| write.spark.fanout.enabled       | false        | Enables Partitioned-Fanout-Writer writes in Spark |
 
 ### Table behavior properties
 
@@ -62,6 +81,8 @@ Iceberg tables support table properties to configure table behavior, like the de
 | commit.manifest.target-size-bytes  | 8388608 (8 MB)   | Target size when merging manifest files                       |
 | commit.manifest.min-count-to-merge | 100              | Minimum number of manifests to accumulate before merging      |
 | commit.manifest-merge.enabled      | true             | Controls whether to automatically merge manifests on writes   |
+| history.expire.max-snapshot-age-ms | 432000000 (5 days) | Default max age of snapshots to keep while expiring snapshots    |
+| history.expire.min-snapshots-to-keep | 1                | Default min number of snapshots to keep while expiring snapshots |
 
 ### Compatibility flags
 
@@ -73,16 +94,22 @@ Iceberg tables support table properties to configure table behavior, like the de
 
 The following properties from the Hadoop configuration are used by the Hive Metastore connector.
 
-| Property                           | Default          | Description                                                   |
-| ---------------------------------- | ---------------- | ------------------------------------------------------------- |
-| iceberg.hive.client-pool-size      | 5                | The size of the Hive client pool when tracking tables in HMS  |
-| iceberg.hive.lock-timeout-ms       | 180000 (3 min)   | Maximum time in milliseconds to acquire a lock                |
+| Property                              | Default          | Description                                                                        |
+| ------------------------------------- | ---------------- | ---------------------------------------------------------------------------------- |
+| iceberg.hive.client-pool-size         | 5                | The size of the Hive client pool when tracking tables in HMS                       |
+| iceberg.hive.lock-timeout-ms          | 180000 (3 min)   | Maximum time in milliseconds to acquire a lock                                     |
+| iceberg.hive.lock-check-min-wait-ms   | 50               | Minimum time in milliseconds to check back on the status of lock acquisition       |
+| iceberg.hive.lock-check-max-wait-ms   | 5000             | Maximum time in milliseconds to check back on the status of lock acquisition       |
+
+Note: `iceberg.hive.lock-check-max-wait-ms` should be less than the [transaction timeout](https://cwiki.apache.org/confluence/display/Hive/Configuration+Properties#ConfigurationProperties-hive.txn.timeout) 
+of the Hive Metastore (`hive.txn.timeout` or `metastore.txn.timeout` in the newer versions). Otherwise, the heartbeats on the lock (which happens during the lock checks) would end up expiring in the 
+Hive Metastore before the lock is retried from Iceberg.
 
 ## Spark configuration
 
 ### Catalogs
 
-[Spark catalogs](../spark#configuring-catalogs) are configured using Spark session properties.
+[Spark catalogs](./spark.md#configuring-catalogs) are configured using Spark session properties.
 
 A catalog is created and named by adding a property `spark.sql.catalog.(catalog-name)` with an implementation class for its value.
 
@@ -95,7 +122,8 @@ Both catalogs are configured using properties nested under the catalog name:
 
 | Property                                           | Values                        | Description                                                          |
 | -------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------- |
-| spark.sql.catalog._catalog-name_.type              | hive or hadoop                | The underlying Iceberg catalog implementation                        |
+| spark.sql.catalog._catalog-name_.type              | `hive` or `hadoop`            | The underlying Iceberg catalog implementation, `HiveCatalog` or `HadoopCatalog` |
+| spark.sql.catalog._catalog-name_.catalog-impl      |                               | The underlying Iceberg catalog implementation. When set, the value of `type` property is ignored |
 | spark.sql.catalog._catalog-name_.default-namespace | default                       | The default current namespace for the catalog                        |
 | spark.sql.catalog._catalog-name_.uri               | thrift://host:port            | URI for the Hive Metastore; default from `hive-site.xml` (Hive only) |
 | spark.sql.catalog._catalog-name_.warehouse         | hdfs://nn:8020/warehouse/path | Base path for the warehouse directory (Hadoop only)                  |
@@ -118,6 +146,8 @@ spark.read
 | split-size      | As per table property | Overrides this table's read.split.target-size and read.split.metadata-target-size         |
 | lookback        | As per table property | Overrides this table's read.split.planning-lookback                                       |
 | file-open-cost  | As per table property | Overrides this table's read.split.open-file-cost                                          |
+| vectorization-enabled  | As per table property | Overrides this table's read.parquet.vectorization.enabled                                          |
+| batch-size  | As per table property | Overrides this table's read.parquet.vectorization.batch-size                                          |
 
 ### Write options
 
@@ -127,6 +157,7 @@ Spark write options are passed when configuring the DataFrameWriter, like this:
 // write with Avro instead of Parquet
 df.write
     .option("write-format", "avro")
+    .option("snapshot-property.key", "value")
     .insertInto("catalog.db.table")
 ```
 
@@ -136,4 +167,6 @@ df.write
 | target-file-size-bytes | As per table property      | Overrides this table's write.target-file-size-bytes          |
 | check-nullability      | true                       | Sets the nullable check on fields                            |
 | snapshot-property._custom-key_    | null            | Adds an entry with custom-key and corresponding value in the snapshot summary  |
+| fanout-enabled       | false        | Overrides this table's write.spark.fanout.enabled  |
+| check-ordering       | true        | Checks if input schema and table schema are same  |
 

@@ -23,6 +23,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -37,13 +38,14 @@ import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
-import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.util.ByteBuffers;
 import org.apache.spark.rdd.InputFileBlockHolder;
 import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.unsafe.types.UTF8String;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Base class of Spark readers.
@@ -51,11 +53,14 @@ import org.apache.spark.unsafe.types.UTF8String;
  * @param <T> is the Java class returned by this reader whose objects contain one or more rows.
  */
 abstract class BaseDataReader<T> implements Closeable {
+  private static final Logger LOG = LoggerFactory.getLogger(BaseDataReader.class);
+
   private final Iterator<FileScanTask> tasks;
   private final Map<String, InputFile> inputFiles;
 
   private CloseableIterator<T> currentIterator;
   private T current = null;
+  private FileScanTask currentTask = null;
 
   BaseDataReader(CombinedScanTask task, FileIO io, EncryptionManager encryptionManager) {
     this.tasks = task.files().iterator();
@@ -69,24 +74,33 @@ abstract class BaseDataReader<T> implements Closeable {
     // decrypt with the batch call to avoid multiple RPCs to a key server, if possible
     Iterable<InputFile> decryptedFiles = encryptionManager.decrypt(encrypted::iterator);
 
-    ImmutableMap.Builder<String, InputFile> inputFileBuilder = ImmutableMap.builder();
-    decryptedFiles.forEach(decrypted -> inputFileBuilder.put(decrypted.location(), decrypted));
-    this.inputFiles = inputFileBuilder.build();
+    Map<String, InputFile> files = Maps.newHashMapWithExpectedSize(task.files().size());
+    decryptedFiles.forEach(decrypted -> files.putIfAbsent(decrypted.location(), decrypted));
+    this.inputFiles = Collections.unmodifiableMap(files);
+
     this.currentIterator = CloseableIterator.empty();
   }
 
   public boolean next() throws IOException {
-    while (true) {
-      if (currentIterator.hasNext()) {
-        this.current = currentIterator.next();
-        return true;
-      } else if (tasks.hasNext()) {
-        this.currentIterator.close();
-        this.currentIterator = open(tasks.next());
-      } else {
-        this.currentIterator.close();
-        return false;
+    try {
+      while (true) {
+        if (currentIterator.hasNext()) {
+          this.current = currentIterator.next();
+          return true;
+        } else if (tasks.hasNext()) {
+          this.currentIterator.close();
+          this.currentTask = tasks.next();
+          this.currentIterator = open(currentTask);
+        } else {
+          this.currentIterator.close();
+          return false;
+        }
       }
+    } catch (IOException | RuntimeException e) {
+      if (currentTask != null && !currentTask.isDataTask()) {
+        LOG.error("Error reading file: {}", getInputFile(currentTask).location(), e);
+      }
+      throw e;
     }
   }
 

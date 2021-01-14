@@ -21,31 +21,47 @@ package org.apache.iceberg.spark.source;
 
 import java.util.Map;
 import java.util.Set;
+import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.spark.Spark3Util;
 import org.apache.iceberg.spark.SparkFilters;
 import org.apache.iceberg.spark.SparkSchemaUtil;
+import org.apache.iceberg.types.Types;
 import org.apache.spark.sql.SparkSession;
-import org.apache.spark.sql.connector.catalog.SupportsDelete;
 import org.apache.spark.sql.connector.catalog.SupportsRead;
 import org.apache.spark.sql.connector.catalog.SupportsWrite;
 import org.apache.spark.sql.connector.catalog.TableCapability;
 import org.apache.spark.sql.connector.expressions.Transform;
+import org.apache.spark.sql.connector.iceberg.catalog.ExtendedSupportsDelete;
+import org.apache.spark.sql.connector.iceberg.catalog.SupportsMerge;
+import org.apache.spark.sql.connector.iceberg.write.MergeBuilder;
 import org.apache.spark.sql.connector.read.ScanBuilder;
 import org.apache.spark.sql.connector.write.LogicalWriteInfo;
 import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.sources.Filter;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import static org.apache.iceberg.TableProperties.DELETE_MODE;
+import static org.apache.iceberg.TableProperties.DELETE_MODE_DEFAULT;
+import static org.apache.iceberg.TableProperties.MERGE_MODE;
+import static org.apache.iceberg.TableProperties.MERGE_MODE_DEFAULT;
+import static org.apache.iceberg.TableProperties.UPDATE_MODE;
+import static org.apache.iceberg.TableProperties.UPDATE_MODE_DEFAULT;
 
 public class SparkTable implements org.apache.spark.sql.connector.catalog.Table,
-    SupportsRead, SupportsWrite, SupportsDelete {
+    SupportsRead, SupportsWrite, ExtendedSupportsDelete, SupportsMerge {
+
+  private static final Logger LOG = LoggerFactory.getLogger(SparkTable.class);
 
   private static final Set<String> RESERVED_PROPERTIES = Sets.newHashSet("provider", "format", "current-snapshot-id");
   private static final Set<TableCapability> CAPABILITIES = ImmutableSet.of(
@@ -156,8 +172,64 @@ public class SparkTable implements org.apache.spark.sql.connector.catalog.Table,
   }
 
   @Override
+  public MergeBuilder newMergeBuilder(String operation, LogicalWriteInfo info) {
+    String mode = getRowLevelOperationMode(operation);
+    ValidationException.check(mode.equals("copy-on-write"), "Unsupported mode for %s: %s", operation, mode);
+    return new SparkMergeBuilder(sparkSession(), icebergTable, operation, info);
+  }
+
+  private String getRowLevelOperationMode(String operation) {
+    Map<String, String> props = icebergTable.properties();
+    if (operation.equalsIgnoreCase("delete")) {
+      return props.getOrDefault(DELETE_MODE, DELETE_MODE_DEFAULT);
+    } else if (operation.equalsIgnoreCase("update")) {
+      return props.getOrDefault(UPDATE_MODE, UPDATE_MODE_DEFAULT);
+    } else if (operation.equalsIgnoreCase("merge")) {
+      return props.getOrDefault(MERGE_MODE, MERGE_MODE_DEFAULT);
+    } else {
+      throw new IllegalArgumentException("Unsupported operation: " + operation);
+    }
+  }
+
+  @Override
+  public boolean canDeleteWhere(Filter[] filters) {
+    if (table().specs().size() > 1) {
+      // cannot guarantee a metadata delete will be successful if we have multiple specs
+      return false;
+    }
+
+    Set<Integer> identitySourceIds = table().spec().identitySourceIds();
+    Schema schema = table().schema();
+
+    for (Filter filter : filters) {
+      // return false if the filter requires rewrite or if we cannot translate the filter
+      if (requiresRewrite(filter, schema, identitySourceIds) || SparkFilters.convert(filter) == null) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  private boolean requiresRewrite(Filter filter, Schema schema, Set<Integer> identitySourceIds) {
+    // TODO: handle dots correctly via v2references
+    // TODO: detect more cases that don't require rewrites
+    Set<String> filterRefs = Sets.newHashSet(filter.references());
+    return filterRefs.stream().anyMatch(ref -> {
+      Types.NestedField field = schema.findField(ref);
+      ValidationException.check(field != null, "Cannot find field %s in schema", ref);
+      return !identitySourceIds.contains(field.fieldId());
+    });
+  }
+
+  @Override
   public void deleteWhere(Filter[] filters) {
     Expression deleteExpr = SparkFilters.convert(filters);
+
+    if (deleteExpr == Expressions.alwaysFalse()) {
+      LOG.info("Skipping the delete operation as the condition is always false");
+      return;
+    }
 
     try {
       icebergTable.newDelete()

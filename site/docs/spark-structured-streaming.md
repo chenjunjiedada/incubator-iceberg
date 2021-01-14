@@ -56,6 +56,29 @@ Iceberg supports `append` and `complete` output modes:
 The table should be created in prior to start the streaming query. Refer [SQL create table](/spark/#create-table)
 on Spark page to see how to create the Iceberg table.
 
+### Writing against partitioned table
+
+Iceberg requires the data to be sorted according to the partition spec per task (Spark partition) in prior to write
+against partitioned table. For batch queries you're encouraged to do explicit sort to fulfill the requirement
+(see [here](/spark/#writing-against-partitioned-table)), but the approach would bring additional latency as
+repartition and sort are considered as heavy operations for streaming workload. To avoid additional latency, you can
+enable fanout writer to eliminate the requirement.
+
+```scala
+val tableIdentifier: String = ...
+data.writeStream
+    .format("iceberg")
+    .outputMode("append")
+    .trigger(Trigger.ProcessingTime(1, TimeUnit.MINUTES))
+    .option("path", tableIdentifier)
+    .option("fanout-enabled", "true")
+    .option("checkpointLocation", checkpointPath)
+    .start()
+```
+
+Fanout writer opens the files per partition value and doesn't close these files till write task is finished.
+This functionality is discouraged for batch query, as explicit sort against output rows isn't expensive for batch workload.
+
 ## Maintenance for streaming tables
 
 Streaming queries can create new table versions quickly, which creates lots of table metadata to track those versions.
@@ -72,13 +95,13 @@ documents how to configure the interval.
 
 ### Expire old snapshots
 
-Each micro-batch written to a table produces a new snapshot, which are tracked in table metadata until they are expired to remove the metadata and any data files that are no longer needed. Snapshots accumulate quickly with frequent commits, so it is highly recommended that tables written by streaming queries are [regularly maintained](../maintenance#expire-snapshots).
+Each micro-batch written to a table produces a new snapshot, which are tracked in table metadata until they are expired to remove the metadata and any data files that are no longer needed. Snapshots accumulate quickly with frequent commits, so it is highly recommended that tables written by streaming queries are [regularly maintained](./maintenance.md#expire-snapshots).
 
 ### Compacting data files
 
-The amount of data written in a micro batch is typically small, which can cause the table metadata to track lots of small files. [Compacting small files into larger files](../maintenance#compact-data-files) reduces the metadata needed by the table, and increases query efficiency.
+The amount of data written in a micro batch is typically small, which can cause the table metadata to track lots of small files. [Compacting small files into larger files](./maintenance.md#compact-data-files) reduces the metadata needed by the table, and increases query efficiency.
 
 ### Rewrite manifests
 
 To optimize write latency on streaming workload, Iceberg may write the new snapshot with a "fast" append that does not automatically compact manifests.
-This could lead lots of small manifest files. Manifests can be [rewritten to optimize queries and to compact](../maintenance#rewrite-manifests).
+This could lead lots of small manifest files. Manifests can be [rewritten to optimize queries and to compact](./maintenance.md#rewrite-manifests).

@@ -21,10 +21,12 @@ package org.apache.iceberg.hive;
 
 import java.io.Closeable;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
@@ -36,6 +38,8 @@ import org.apache.hadoop.hive.metastore.api.NoSuchObjectException;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.UnknownDBException;
 import org.apache.iceberg.BaseMetastoreCatalog;
+import org.apache.iceberg.BaseMetastoreTableOperations;
+import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableOperations;
@@ -45,6 +49,8 @@ import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.exceptions.NamespaceNotEmptyException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
+import org.apache.iceberg.hadoop.HadoopFileIO;
+import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.relocated.com.google.common.base.Joiner;
 import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
@@ -54,14 +60,18 @@ import org.apache.thrift.TException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, SupportsNamespaces {
+public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, SupportsNamespaces, Configurable {
   private static final Logger LOG = LoggerFactory.getLogger(HiveCatalog.class);
 
-  private final String name;
-  private final HiveClientPool clients;
-  private final Configuration conf;
-  private final StackTraceElement[] createStack;
+  private String name;
+  private HiveClientPool clients;
+  private Configuration conf;
+  private StackTraceElement[] createStack;
+  private FileIO fileIO;
   private boolean closed;
+
+  public HiveCatalog() {
+  }
 
   public HiveCatalog(Configuration conf) {
     this.name = "hive";
@@ -69,27 +79,93 @@ public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, Supp
     this.conf = conf;
     this.createStack = Thread.currentThread().getStackTrace();
     this.closed = false;
+    this.fileIO = new HadoopFileIO(conf);
   }
 
+  /**
+   * Hive Catalog constructor.
+   *
+   * @deprecated please use the no-arg constructor, setConf and initialize to construct the catalog. Will be removed in
+   * v0.12.0
+   * @param name catalog name
+   * @param uri Hive metastore uri
+   * @param clientPoolSize size of client pool
+   * @param conf Hadoop Configuration
+   */
+  @Deprecated
   public HiveCatalog(String name, String uri, int clientPoolSize, Configuration conf) {
     this(name, uri, null, clientPoolSize, conf);
   }
 
+  /**
+   * Hive Catalog constructor.
+   *
+   * @deprecated please use the no-arg constructor, setConf and initialize to construct the catalog. Will be removed in
+   * v0.12.0
+   * @param name catalog name
+   * @param uri Hive metastore uri
+   * @param warehouse location of Hive warehouse
+   * @param clientPoolSize size of client pool
+   * @param conf Hadoop Configuration
+   */
+  @Deprecated
   public HiveCatalog(String name, String uri, String warehouse, int clientPoolSize, Configuration conf) {
-    this.name = name;
-    this.conf = new Configuration(conf);
-    // before building the client pool, overwrite the configuration's URIs if the argument is non-null
-    if (uri != null) {
-      this.conf.set(HiveConf.ConfVars.METASTOREURIS.varname, uri);
-    }
+    this(name, uri, warehouse, clientPoolSize, conf, Maps.newHashMap());
+  }
 
+  /**
+   * Hive Catalog constructor.
+   *
+   * @deprecated please use the no-arg constructor, setConf and initialize to construct the catalog. Will be removed in
+   * v0.12.0
+   * @param name catalog name
+   * @param uri Hive metastore uri
+   * @param warehouse location of Hive warehouse
+   * @param clientPoolSize size of client pool
+   * @param conf Hadoop Configuration
+   * @param properties extra Hive configuration properties
+   */
+  @Deprecated
+  public HiveCatalog(
+      String name,
+      String uri,
+      String warehouse,
+      int clientPoolSize,
+      Configuration conf,
+      Map<String, String> properties) {
+
+    Map<String, String> props = new HashMap<>(properties);
     if (warehouse != null) {
-      this.conf.set(HiveConf.ConfVars.METASTOREWAREHOUSE.varname, warehouse);
+      props.put(CatalogProperties.WAREHOUSE_LOCATION, warehouse);
+    }
+    if (uri != null) {
+      props.put(CatalogProperties.HIVE_URI, uri);
+    }
+    props.put(CatalogProperties.HIVE_CLIENT_POOL_SIZE, Integer.toString(clientPoolSize));
+
+    setConf(conf);
+    initialize(name, props);
+  }
+
+  @Override
+  public void initialize(String inputName, Map<String, String> properties) {
+    this.name = inputName;
+    if (properties.containsKey(CatalogProperties.HIVE_URI)) {
+      this.conf.set(HiveConf.ConfVars.METASTOREURIS.varname, properties.get(CatalogProperties.HIVE_URI));
     }
 
+    if (properties.containsKey(CatalogProperties.WAREHOUSE_LOCATION)) {
+      this.conf.set(HiveConf.ConfVars.METASTOREWAREHOUSE.varname, properties.get(CatalogProperties.WAREHOUSE_LOCATION));
+    }
+
+    int clientPoolSize = Integer.parseInt(
+        properties.getOrDefault(CatalogProperties.HIVE_CLIENT_POOL_SIZE, "5"));
     this.clients = new HiveClientPool(clientPoolSize, this.conf);
     this.createStack = Thread.currentThread().getStackTrace();
     this.closed = false;
+
+    String fileIOImpl = properties.get(CatalogProperties.FILE_IO_IMPL);
+    this.fileIO = fileIOImpl == null ? new HadoopFileIO(conf) : CatalogUtil.loadFileIO(fileIOImpl, properties, conf);
   }
 
   @Override
@@ -99,9 +175,12 @@ public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, Supp
     String database = namespace.level(0);
 
     try {
-      List<String> tables = clients.run(client -> client.getAllTables(database));
-      List<TableIdentifier> tableIdentifiers = tables.stream()
-          .map(t -> TableIdentifier.of(namespace, t))
+      List<String> tableNames = clients.run(client -> client.getAllTables(database));
+      List<Table> tableObjects = clients.run(client -> client.getTableObjectsByName(database, tableNames));
+      List<TableIdentifier> tableIdentifiers = tableObjects.stream()
+          .filter(table -> table.getParameters() == null ? false : BaseMetastoreTableOperations.ICEBERG_TABLE_TYPE_VALUE
+              .equalsIgnoreCase(table.getParameters().get(BaseMetastoreTableOperations.TABLE_TYPE_PROP)))
+          .map(table -> TableIdentifier.of(namespace, table.getTableName()))
           .collect(Collectors.toList());
 
       LOG.debug("Listing of namespace: {} resulted in the following tables: {}", namespace, tableIdentifiers);
@@ -403,7 +482,7 @@ public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, Supp
   public TableOperations newTableOps(TableIdentifier tableIdentifier) {
     String dbName = tableIdentifier.namespace().level(0);
     String tableName = tableIdentifier.name();
-    return new HiveTableOperations(conf, clients, name, dbName, tableName);
+    return new HiveTableOperations(conf, clients, fileIO, name, dbName, tableName);
   }
 
   @Override
@@ -496,6 +575,9 @@ public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, Supp
   @Override
   protected void finalize() throws Throwable {
     super.finalize();
+    // todo it is possible that the Catalog is gc-ed before child table operations are done w/ the clients object.
+    // The closing of the HiveCatalog should take that into account and child TableOperations should own the clients obj
+    // or the TabaleOperations should be explicitly closed and the Catalog can't be gc-ed/closed till all children are.
     if (!closed) {
       close(); // releasing resources is more important than printing the warning
       String trace = Joiner.on("\n\t").join(
@@ -510,5 +592,15 @@ public class HiveCatalog extends BaseMetastoreCatalog implements Closeable, Supp
         .add("name", name)
         .add("uri", this.conf.get(HiveConf.ConfVars.METASTOREURIS.varname))
         .toString();
+  }
+
+  @Override
+  public void setConf(Configuration conf) {
+    this.conf = new Configuration(conf);
+  }
+
+  @Override
+  public Configuration getConf() {
+    return conf;
   }
 }

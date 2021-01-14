@@ -129,9 +129,39 @@ public class TableProperties {
   public static final String WRITE_TARGET_FILE_SIZE_BYTES = "write.target-file-size-bytes";
   public static final long WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT = Long.MAX_VALUE;
 
+  public static final String SPARK_WRITE_PARTITIONED_FANOUT_ENABLED = "write.spark.fanout.enabled";
+  public static final boolean SPARK_WRITE_PARTITIONED_FANOUT_ENABLED_DEFAULT = false;
+
   public static final String SNAPSHOT_ID_INHERITANCE_ENABLED = "compatibility.snapshot-id-inheritance.enabled";
   public static final boolean SNAPSHOT_ID_INHERITANCE_ENABLED_DEFAULT = false;
 
   public static final String ENGINE_HIVE_ENABLED = "engine.hive.enabled";
   public static final boolean ENGINE_HIVE_ENABLED_DEFAULT = false;
+
+  public static final String GC_ENABLED = "gc.enabled";
+  public static final boolean GC_ENABLED_DEFAULT = true;
+
+  public static final String MAX_SNAPSHOT_AGE_MS = "history.expire.max-snapshot-age-ms";
+  public static final long MAX_SNAPSHOT_AGE_MS_DEFAULT = 5 * 24 * 60 * 60 * 1000; // 5 days
+
+  public static final String MIN_SNAPSHOTS_TO_KEEP = "history.expire.min-snapshots-to-keep";
+  public static final int MIN_SNAPSHOTS_TO_KEEP_DEFAULT = 1;
+
+  public static final String DELETE_ISOLATION_LEVEL = "write.delete.isolation-level";
+  public static final String DELETE_ISOLATION_LEVEL_DEFAULT = "serializable";
+
+  public static final String DELETE_MODE = "write.delete.mode";
+  public static final String DELETE_MODE_DEFAULT = "copy-on-write";
+
+  public static final String UPDATE_ISOLATION_LEVEL = "write.update.isolation-level";
+  public static final String UPDATE_ISOLATION_LEVEL_DEFAULT = "serializable";
+
+  public static final String UPDATE_MODE = "write.update.mode";
+  public static final String UPDATE_MODE_DEFAULT = "copy-on-write";
+
+  public static final String MERGE_ISOLATION_LEVEL = "write.merge.isolation-level";
+  public static final String MERGE_ISOLATION_LEVEL_DEFAULT = "serializable";
+
+  public static final String MERGE_MODE = "write.merge.mode";
+  public static final String MERGE_MODE_DEFAULT = "copy-on-write";
 }

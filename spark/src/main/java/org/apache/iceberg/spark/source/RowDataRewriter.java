@@ -40,6 +40,7 @@ import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.io.UnpartitionedWriter;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.spark.SparkSchemaUtil;
+import org.apache.iceberg.util.PropertyUtil;
 import org.apache.spark.TaskContext;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.broadcast.Broadcast;
@@ -98,16 +99,24 @@ public class RowDataRewriter implements Serializable {
         task, schema, schema, nameMapping, io.value(), encryptionManager.value(), caseSensitive);
 
     StructType structType = SparkSchemaUtil.convert(schema);
-    SparkAppenderFactory appenderFactory = new SparkAppenderFactory(properties, schema, structType);
+    SparkAppenderFactory appenderFactory = new SparkAppenderFactory(properties, schema, structType, spec);
     OutputFileFactory fileFactory = new OutputFileFactory(
         spec, format, locations, io.value(), encryptionManager.value(), partitionId, taskId);
 
     TaskWriter<InternalRow> writer;
     if (spec.fields().isEmpty()) {
-      writer = new UnpartitionedWriter<>(spec, format, appenderFactory, fileFactory, io.value(), Long.MAX_VALUE);
+      writer = new UnpartitionedWriter<>(spec, format, appenderFactory, fileFactory, io.value(),
+          Long.MAX_VALUE);
+    } else if (PropertyUtil.propertyAsBoolean(properties,
+        TableProperties.SPARK_WRITE_PARTITIONED_FANOUT_ENABLED,
+        TableProperties.SPARK_WRITE_PARTITIONED_FANOUT_ENABLED_DEFAULT)) {
+      writer = new SparkPartitionedFanoutWriter(
+          spec, format, appenderFactory, fileFactory, io.value(), Long.MAX_VALUE, schema,
+          structType);
     } else {
-      writer = new SparkPartitionedWriter(spec, format, appenderFactory, fileFactory, io.value(), Long.MAX_VALUE,
-          schema, structType);
+      writer = new SparkPartitionedWriter(
+          spec, format, appenderFactory, fileFactory, io.value(), Long.MAX_VALUE, schema,
+          structType);
     }
 
     try {
@@ -120,7 +129,7 @@ public class RowDataRewriter implements Serializable {
       dataReader = null;
 
       writer.close();
-      return Lists.newArrayList(writer.complete());
+      return Lists.newArrayList(writer.dataFiles());
 
     } catch (Throwable originalThrowable) {
       try {

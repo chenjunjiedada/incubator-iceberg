@@ -21,15 +21,15 @@
 
 The main purpose of the Iceberg API is to manage table metadata, like schema, partition spec, metadata, and data files that store table data.
 
-Table metadata and operations are accessed through the `Table` interface. This interface will return table information, 
+Table metadata and operations are accessed through the `Table` interface. This interface will return table information.
 
 ### Table metadata
 
-The [`Table` interface](/javadoc/master/index.html?org/apache/iceberg/Table.html) provides access table metadata:
+The [`Table` interface](./javadoc/master/index.html?org/apache/iceberg/Table.html) provides access to the table metadata:
 
-* `schema` returns the current table [schema](../schemas)
+* `schema` returns the current table [schema](./schemas.md)
 * `spec` returns the current table partition spec
-* `properties` returns a map of key-value [properties](../configuration)
+* `properties` returns a map of key-value [properties](./configuration.md)
 * `currentSnapshot` returns the current table snapshot
 * `snapshots` returns all valid snapshots for the table
 * `snapshot(id)` returns a specific snapshot by ID
@@ -73,7 +73,7 @@ Use `asOfTime` or `useSnapshot` to configure the table snapshot for time travel 
 
 ### Update operations
 
-`Table` also exposes operations that update the table. These operations use a builder pattern, [`PendingUpdate`](/javadoc/master/index.html?org/apache/iceberg/PendingUpdate.html), that commits when `PendingUpdate#commit` is called.
+`Table` also exposes operations that update the table. These operations use a builder pattern, [`PendingUpdate`](./javadoc/master/index.html?org/apache/iceberg/PendingUpdate.html), that commits when `PendingUpdate#commit` is called.
 
 For example, updating the table schema is done by calling `updateSchema`, adding updates to the builder, and finally calling `commit` to commit the pending changes to the table:
 
@@ -95,7 +95,7 @@ Available operations to update a table are:
 * `newRewrite` -- used to rewrite data files; will replace existing files with new versions
 * `newTransaction` -- create a new table-level transaction
 * `rewriteManifests` -- rewrite manifest data by clustering files, for faster scan planning
-* `rollback` -- roll the table state back by pointing current to a specific snapshot
+* `rollback` -- rollback the table state to a specific snapshot
 
 ### Transactions
 
@@ -103,7 +103,7 @@ Transactions are used to commit multiple table changes in a single atomic operat
 
 For example, deleting and appending a file in the same transaction:
 ```java
-Transaction t = table.newTrasaction();
+Transaction t = table.newTransaction();
 
 // commit operations to the transaction
 t.newDelete().deleteFromRowFilter(filter).commit();
@@ -115,7 +115,7 @@ t.commitTransaction();
 
 ## Types
 
-Iceberg data types are located in the [`org.apache.iceberg.types` package](/javadoc/master/index.html?org/apache/iceberg/types/package-summary.html).
+Iceberg data types are located in the [`org.apache.iceberg.types` package](./javadoc/master/index.html?org/apache/iceberg/types/package-summary.html).
 
 ### Primitives
 
@@ -131,7 +131,7 @@ Types.DecimalType.of(9, 2) // decimal(9, 2)
 
 Structs, maps, and lists are created using factory methods in type classes.
 
-Like struct fields, map keys or values and list elements are tracked as nested fields. Nested fields track [field IDs](../evolution#correctness) and nullability.
+Like struct fields, map keys or values and list elements are tracked as nested fields. Nested fields track [field IDs](./evolution.md#correctness) and nullability.
 
 Struct fields are created using `NestedField.optional` or `NestedField.required`. Map value and list element nullability is set in the map and list factory methods.
 
@@ -157,7 +157,7 @@ ListType list = ListType.ofRequired(1, IntegerType.get());
 
 ## Expressions
 
-Iceberg's expressions are used to configure table scans. To create expressions, use the factory methods in [`Expressions`](/javadoc/master/index.html?org/apache/iceberg/expressions/Expressions.html).
+Iceberg's expressions are used to configure table scans. To create expressions, use the factory methods in [`Expressions`](./javadoc/master/index.html?org/apache/iceberg/expressions/Expressions.html).
 
 Supported predicate expressions are:
 
@@ -188,7 +188,7 @@ Constant expressions are:
 
 When created, expressions are unbound. Before an expression is used, it will be bound to a data type to find the field ID the expression name represents, and to convert predicate literals.
 
-For example, before using the expression `lessThan("x", 10)`, Iceberg needs to determine which column `"x"` refers to and convert `10` to that colunn's data type.
+For example, before using the expression `lessThan("x", 10)`, Iceberg needs to determine which column `"x"` refers to and convert `10` to that column's data type.
 
 If the expression could be bound to the type `struct<1 x: long, 2 y: long>` or to `struct<11 x: int, 12 y: int>`.
 

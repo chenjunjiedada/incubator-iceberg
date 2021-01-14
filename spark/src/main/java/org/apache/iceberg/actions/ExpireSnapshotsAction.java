@@ -30,8 +30,10 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableOperations;
 import org.apache.iceberg.exceptions.NotFoundException;
+import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
+import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.Tasks;
 import org.apache.spark.sql.Column;
 import org.apache.spark.sql.Dataset;
@@ -40,6 +42,9 @@ import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.functions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.apache.iceberg.TableProperties.GC_ENABLED;
+import static org.apache.iceberg.TableProperties.GC_ENABLED_DEFAULT;
 
 /**
  * An action which performs the same operation as {@link ExpireSnapshots} but uses Spark
@@ -53,7 +58,7 @@ import org.slf4j.LoggerFactory;
  * are issued. Deletes are still performed locally after retrieving the results from the Spark executors.
  */
 @SuppressWarnings("UnnecessaryAnonymousClass")
-public class ExpireSnapshotsAction extends BaseAction<ExpireSnapshotsActionResult> {
+public class ExpireSnapshotsAction extends BaseSparkAction<ExpireSnapshotsActionResult> {
   private static final Logger LOG = LoggerFactory.getLogger(ExpireSnapshotsAction.class);
 
   private static final String DATA_FILE = "Data File";
@@ -85,6 +90,10 @@ public class ExpireSnapshotsAction extends BaseAction<ExpireSnapshotsActionResul
     this.spark = spark;
     this.table = table;
     this.ops = ((HasTableOperations) table).operations();
+
+    ValidationException.check(
+        PropertyUtil.propertyAsBoolean(table.properties(), GC_ENABLED, GC_ENABLED_DEFAULT),
+        "Cannot expire snapshots: GC is disabled (deleting files may corrupt other tables)");
   }
 
   @Override

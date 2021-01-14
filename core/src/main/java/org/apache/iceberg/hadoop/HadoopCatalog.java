@@ -27,12 +27,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.iceberg.BaseMetastoreCatalog;
+import org.apache.iceberg.CatalogProperties;
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.TableMetadata;
@@ -45,11 +47,13 @@ import org.apache.iceberg.exceptions.NamespaceNotEmptyException;
 import org.apache.iceberg.exceptions.NoSuchNamespaceException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.exceptions.RuntimeIOException;
+import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.relocated.com.google.common.base.Joiner;
 import org.apache.iceberg.relocated.com.google.common.base.MoreObjects;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 
 /**
@@ -65,33 +69,67 @@ import org.apache.iceberg.relocated.com.google.common.collect.Sets;
  *
  * Note: The HadoopCatalog requires that the underlying file system supports atomic rename.
  */
-public class HadoopCatalog extends BaseMetastoreCatalog implements Closeable, SupportsNamespaces {
+public class HadoopCatalog extends BaseMetastoreCatalog implements Closeable, SupportsNamespaces, Configurable {
 
   private static final String ICEBERG_HADOOP_WAREHOUSE_BASE = "iceberg/warehouse";
   private static final String TABLE_METADATA_FILE_EXTENSION = ".metadata.json";
   private static final Joiner SLASH = Joiner.on("/");
   private static final PathFilter TABLE_FILTER = path -> path.getName().endsWith(TABLE_METADATA_FILE_EXTENSION);
 
-  private final String catalogName;
-  private final Configuration conf;
-  private final String warehouseLocation;
-  private final FileSystem fs;
+  private String catalogName;
+  private Configuration conf;
+  private String warehouseLocation;
+  private FileSystem fs;
+  private FileIO fileIO;
+
+  public HadoopCatalog(){
+  }
 
   /**
    * The constructor of the HadoopCatalog. It uses the passed location as its warehouse directory.
    *
+   * @deprecated please use the no-arg constructor, setConf and initialize to construct the catalog. Will be removed in
+   * v0.12.0
    * @param name The catalog name
    * @param conf The Hadoop configuration
    * @param warehouseLocation The location used as warehouse directory
    */
+  @Deprecated
   public HadoopCatalog(String name, Configuration conf, String warehouseLocation) {
-    Preconditions.checkArgument(warehouseLocation != null && !warehouseLocation.equals(""),
-        "no location provided for warehouse");
+    this(name, conf, warehouseLocation, Maps.newHashMap());
+  }
 
+  /**
+   * The all-arg constructor of the HadoopCatalog.
+   *
+   * @deprecated please use the no-arg constructor, setConf and initialize to construct the catalog. Will be removed in
+   * v0.12.0
+   * @param name The catalog name
+   * @param conf The Hadoop configuration
+   * @param warehouseLocation The location used as warehouse directory
+   * @param properties catalog properties
+   */
+  @Deprecated
+  public HadoopCatalog(String name, Configuration conf, String warehouseLocation, Map<String, String> properties) {
+    Preconditions.checkArgument(warehouseLocation != null && !warehouseLocation.equals(""),
+        "Cannot instantiate hadoop catalog. No location provided for warehouse");
+    setConf(conf);
+    Map<String, String> props = Maps.newHashMap(properties);
+    props.put(CatalogProperties.WAREHOUSE_LOCATION, warehouseLocation);
+    initialize(name, props);
+  }
+
+  @Override
+  public void initialize(String name, Map<String, String> properties) {
+    String inputWarehouseLocation = properties.get(CatalogProperties.WAREHOUSE_LOCATION);
+    Preconditions.checkArgument(inputWarehouseLocation != null && !inputWarehouseLocation.equals(""),
+        "Cannot instantiate hadoop catalog. No location provided for warehouse (Set warehouse config)");
     this.catalogName = name;
-    this.conf = conf;
-    this.warehouseLocation = warehouseLocation.replaceAll("/*$", "");
+    this.warehouseLocation = inputWarehouseLocation.replaceAll("/*$", "");
     this.fs = Util.getFs(new Path(warehouseLocation), conf);
+
+    String fileIOImpl = properties.get(CatalogProperties.FILE_IO_IMPL);
+    this.fileIO = fileIOImpl == null ? new HadoopFileIO(conf) : CatalogUtil.loadFileIO(fileIOImpl, properties, conf);
   }
 
   /**
@@ -163,7 +201,7 @@ public class HadoopCatalog extends BaseMetastoreCatalog implements Closeable, Su
 
   @Override
   protected TableOperations newTableOps(TableIdentifier identifier) {
-    return new HadoopTableOperations(new Path(defaultWarehouseLocation(identifier)), conf);
+    return new HadoopTableOperations(new Path(defaultWarehouseLocation(identifier)), fileIO, conf);
   }
 
   @Override
@@ -331,14 +369,28 @@ public class HadoopCatalog extends BaseMetastoreCatalog implements Closeable, Su
     return new HadoopCatalogTableBuilder(identifier, schema);
   }
 
+  @Override
+  public void setConf(Configuration conf) {
+    this.conf = conf;
+  }
+
+  @Override
+  public Configuration getConf() {
+    return conf;
+  }
+
   private class HadoopCatalogTableBuilder extends BaseMetastoreCatalogTableBuilder {
+    private final String defaultLocation;
+
     private HadoopCatalogTableBuilder(TableIdentifier identifier, Schema schema) {
       super(identifier, schema);
+      defaultLocation = defaultWarehouseLocation(identifier);
     }
 
     @Override
     public TableBuilder withLocation(String location) {
-      Preconditions.checkArgument(location == null, "Cannot set a custom location for a path-based table");
+      Preconditions.checkArgument(location == null || location.equals(defaultLocation),
+          "Cannot set a custom location for a path-based table. Expected " + defaultLocation + " but got " + location);
       return this;
     }
   }

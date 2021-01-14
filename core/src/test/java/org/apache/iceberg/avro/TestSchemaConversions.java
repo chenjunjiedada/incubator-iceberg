@@ -86,6 +86,16 @@ public class TestSchemaConversions {
     }
   }
 
+  @Test
+  public void testAvroToIcebergTimestampTypeWithoutAdjustToUTC() {
+    // Not included in the primitives test because there is not a way to round trip the avro<->iceberg conversion
+    // This is because iceberg types can only can encode adjust-to-utc=true|false but not a missing adjust-to-utc
+    Type expectedIcebergType = Types.TimestampType.withoutZone();
+    Schema avroType = LogicalTypes.timestampMicros().addToSchema(Schema.create(Schema.Type.LONG));
+
+    Assert.assertEquals(expectedIcebergType, AvroSchemaUtil.convert(avroType));
+  }
+
   private Schema addAdjustToUtc(Schema schema, boolean adjustToUTC) {
     schema.addProp(AvroSchemaUtil.ADJUST_TO_UTC_PROP, adjustToUTC);
     return schema;
@@ -298,5 +308,21 @@ public class TestSchemaConversions {
     List<String> expectedOrigNames = Lists.newArrayList(names);
     expectedOrigNames.set(1, null);  // Name at pos 1 is valid so ICEBERG_FIELD_NAME_PROP is not set
     Assert.assertEquals(expectedOrigNames, origNames);
+  }
+
+  @Test
+  public void testFieldDocsArePreserved() {
+    List<String> fieldDocs = Lists.newArrayList(null, "iceberg originating field doc");
+    org.apache.iceberg.Schema icebergSchema = new org.apache.iceberg.Schema(
+        required(1, "id", Types.IntegerType.get(), fieldDocs.get(0)),
+        optional(2, "data", Types.StringType.get(), fieldDocs.get(1)));
+
+    Schema avroSchema = AvroSchemaUtil.convert(icebergSchema.asStruct());
+    List<String> avroFieldDocs = Lists.newArrayList(Iterables.transform(avroSchema.getFields(), Schema.Field::doc));
+    Assert.assertEquals(avroFieldDocs, fieldDocs);
+
+    org.apache.iceberg.Schema origSchema = AvroSchemaUtil.toIceberg(avroSchema);
+    List<String> origFieldDocs = Lists.newArrayList(Iterables.transform(origSchema.columns(), Types.NestedField::doc));
+    Assert.assertEquals(origFieldDocs, fieldDocs);
   }
 }

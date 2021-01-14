@@ -23,18 +23,16 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Collectors;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.common.StatsSetupConst;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreClient;
 import org.apache.hadoop.hive.metastore.TableType;
 import org.apache.hadoop.hive.metastore.api.EnvironmentContext;
-import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.LockComponent;
 import org.apache.hadoop.hive.metastore.api.LockLevel;
 import org.apache.hadoop.hive.metastore.api.LockRequest;
@@ -47,7 +45,6 @@ import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants;
 import org.apache.iceberg.BaseMetastoreTableOperations;
-import org.apache.iceberg.Schema;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.common.DynMethods;
@@ -56,10 +53,10 @@ import org.apache.iceberg.exceptions.CommitFailedException;
 import org.apache.iceberg.exceptions.NoSuchIcebergTableException;
 import org.apache.iceberg.exceptions.NoSuchTableException;
 import org.apache.iceberg.hadoop.ConfigProperties;
-import org.apache.iceberg.hadoop.HadoopFileIO;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
+import org.apache.iceberg.util.Tasks;
 import org.apache.thrift.TException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,8 +68,12 @@ import org.slf4j.LoggerFactory;
 public class HiveTableOperations extends BaseMetastoreTableOperations {
   private static final Logger LOG = LoggerFactory.getLogger(HiveTableOperations.class);
 
-  private static final String HIVE_ACQUIRE_LOCK_STATE_TIMEOUT_MS = "iceberg.hive.lock-timeout-ms";
-  private static final long HIVE_ACQUIRE_LOCK_STATE_TIMEOUT_MS_DEFAULT = 3 * 60 * 1000; // 3 minutes
+  private static final String HIVE_ACQUIRE_LOCK_TIMEOUT_MS = "iceberg.hive.lock-timeout-ms";
+  private static final String HIVE_LOCK_CHECK_MIN_WAIT_MS = "iceberg.hive.lock-check-min-wait-ms";
+  private static final String HIVE_LOCK_CHECK_MAX_WAIT_MS = "iceberg.hive.lock-check-max-wait-ms";
+  private static final long HIVE_ACQUIRE_LOCK_TIMEOUT_MS_DEFAULT = 3 * 60 * 1000; // 3 minutes
+  private static final long HIVE_LOCK_CHECK_MIN_WAIT_MS_DEFAULT = 50; // 50 milliseconds
+  private static final long HIVE_LOCK_CHECK_MAX_WAIT_MS_DEFAULT = 5 * 1000; // 5 seconds
   private static final DynMethods.UnboundMethod ALTER_TABLE = DynMethods.builder("alter_table")
       .impl(HiveMetaStoreClient.class, "alter_table_with_environmentContext",
           String.class, String.class, Table.class, EnvironmentContext.class)
@@ -80,24 +81,36 @@ public class HiveTableOperations extends BaseMetastoreTableOperations {
           String.class, String.class, Table.class, EnvironmentContext.class)
       .build();
 
+  private static class WaitingForLockException extends RuntimeException {
+    WaitingForLockException(String message) {
+      super(message);
+    }
+  }
+
   private final HiveClientPool metaClients;
   private final String fullName;
   private final String database;
   private final String tableName;
   private final Configuration conf;
   private final long lockAcquireTimeout;
+  private final long lockCheckMinWaitTime;
+  private final long lockCheckMaxWaitTime;
+  private final FileIO fileIO;
 
-  private FileIO fileIO;
-
-  protected HiveTableOperations(Configuration conf, HiveClientPool metaClients,
+  protected HiveTableOperations(Configuration conf, HiveClientPool metaClients, FileIO fileIO,
                                 String catalogName, String database, String table) {
     this.conf = conf;
     this.metaClients = metaClients;
+    this.fileIO = fileIO;
     this.fullName = catalogName + "." + database + "." + table;
     this.database = database;
     this.tableName = table;
     this.lockAcquireTimeout =
-        conf.getLong(HIVE_ACQUIRE_LOCK_STATE_TIMEOUT_MS, HIVE_ACQUIRE_LOCK_STATE_TIMEOUT_MS_DEFAULT);
+        conf.getLong(HIVE_ACQUIRE_LOCK_TIMEOUT_MS, HIVE_ACQUIRE_LOCK_TIMEOUT_MS_DEFAULT);
+    this.lockCheckMinWaitTime =
+        conf.getLong(HIVE_LOCK_CHECK_MIN_WAIT_MS, HIVE_LOCK_CHECK_MIN_WAIT_MS_DEFAULT);
+    this.lockCheckMaxWaitTime =
+        conf.getLong(HIVE_LOCK_CHECK_MAX_WAIT_MS, HIVE_LOCK_CHECK_MAX_WAIT_MS_DEFAULT);
   }
 
   @Override
@@ -107,10 +120,6 @@ public class HiveTableOperations extends BaseMetastoreTableOperations {
 
   @Override
   public FileIO io() {
-    if (fileIO == null) {
-      fileIO = new HadoopFileIO(conf);
-    }
-
     return fileIO;
   }
 
@@ -198,11 +207,7 @@ public class HiveTableOperations extends BaseMetastoreTableOperations {
       throw new RuntimeException("Interrupted during commit", e);
 
     } finally {
-      if (threw) {
-        // if anything went wrong, clean up the uncommitted metadata file
-        io().deleteFile(newMetadataLocation);
-      }
-      unlock(lockId);
+      cleanupMetadataAndUnlock(threw, newMetadataLocation, lockId);
     }
   }
 
@@ -280,12 +285,12 @@ public class HiveTableOperations extends BaseMetastoreTableOperations {
   private StorageDescriptor storageDescriptor(TableMetadata metadata, boolean hiveEngineEnabled) {
 
     final StorageDescriptor storageDescriptor = new StorageDescriptor();
-    storageDescriptor.setCols(columns(metadata.schema()));
+    storageDescriptor.setCols(HiveSchemaUtil.convert(metadata.schema()));
     storageDescriptor.setLocation(metadata.location());
     SerDeInfo serDeInfo = new SerDeInfo();
     if (hiveEngineEnabled) {
-      storageDescriptor.setInputFormat(null);
-      storageDescriptor.setOutputFormat(null);
+      storageDescriptor.setInputFormat("org.apache.iceberg.mr.hive.HiveIcebergInputFormat");
+      storageDescriptor.setOutputFormat("org.apache.iceberg.mr.hive.HiveIcebergOutputFormat");
       serDeInfo.setSerializationLib("org.apache.iceberg.mr.hive.HiveIcebergSerDe");
     } else {
       storageDescriptor.setOutputFormat("org.apache.hadoop.mapred.FileOutputFormat");
@@ -296,12 +301,6 @@ public class HiveTableOperations extends BaseMetastoreTableOperations {
     return storageDescriptor;
   }
 
-  private List<FieldSchema> columns(Schema schema) {
-    return schema.columns().stream()
-        .map(col -> new FieldSchema(col.name(), HiveTypeConverter.convert(col.type()), ""))
-        .collect(Collectors.toList());
-  }
-
   private long acquireLock() throws UnknownHostException, TException, InterruptedException {
     final LockComponent lockComponent = new LockComponent(LockType.EXCLUSIVE, LockLevel.TABLE, database);
     lockComponent.setTablename(tableName);
@@ -309,36 +308,73 @@ public class HiveTableOperations extends BaseMetastoreTableOperations {
         System.getProperty("user.name"),
         InetAddress.getLocalHost().getHostName());
     LockResponse lockResponse = metaClients.run(client -> client.lock(lockRequest));
-    LockState state = lockResponse.getState();
+    AtomicReference<LockState> state = new AtomicReference<>(lockResponse.getState());
     long lockId = lockResponse.getLockid();
 
     final long start = System.currentTimeMillis();
     long duration = 0;
     boolean timeout = false;
-    while (!timeout && state.equals(LockState.WAITING)) {
-      lockResponse = metaClients.run(client -> client.checkLock(lockId));
-      state = lockResponse.getState();
 
-      // check timeout
-      duration = System.currentTimeMillis() - start;
-      if (duration > lockAcquireTimeout) {
+    if (state.get().equals(LockState.WAITING)) {
+      try {
+        // Retry count is the typical "upper bound of retries" for Tasks.run() function. In fact, the maximum number of
+        // attempts the Tasks.run() would try is `retries + 1`. Here, for checking locks, we use timeout as the
+        // upper bound of retries. So it is just reasonable to set a large retry count. However, if we set
+        // Integer.MAX_VALUE, the above logic of `retries + 1` would overflow into Integer.MIN_VALUE. Hence,
+        // the retry is set conservatively as `Integer.MAX_VALUE - 100` so it doesn't hit any boundary issues.
+        Tasks.foreach(lockId)
+            .retry(Integer.MAX_VALUE - 100)
+            .exponentialBackoff(
+                lockCheckMinWaitTime,
+                lockCheckMaxWaitTime,
+                lockAcquireTimeout,
+                1.5)
+            .throwFailureWhenFinished()
+            .onlyRetryOn(WaitingForLockException.class)
+            .run(id -> {
+              try {
+                LockResponse response = metaClients.run(client -> client.checkLock(id));
+                LockState newState = response.getState();
+                state.set(newState);
+                if (newState.equals(LockState.WAITING)) {
+                  throw new WaitingForLockException("Waiting for lock.");
+                }
+              } catch (InterruptedException e) {
+                Thread.interrupted(); // Clear the interrupt status flag
+                LOG.warn("Interrupted while waiting for lock.", e);
+              }
+            }, TException.class);
+      } catch (WaitingForLockException waitingForLockException) {
         timeout = true;
-      } else {
-        Thread.sleep(50);
+        duration = System.currentTimeMillis() - start;
       }
     }
 
     // timeout and do not have lock acquired
-    if (timeout && !state.equals(LockState.ACQUIRED)) {
+    if (timeout && !state.get().equals(LockState.ACQUIRED)) {
       throw new CommitFailedException("Timed out after %s ms waiting for lock on %s.%s",
           duration, database, tableName);
     }
 
-    if (!state.equals(LockState.ACQUIRED)) {
+    if (!state.get().equals(LockState.ACQUIRED)) {
       throw new CommitFailedException("Could not acquire the lock on %s.%s, " +
           "lock request ended in state %s", database, tableName, state);
     }
     return lockId;
+  }
+
+  private void cleanupMetadataAndUnlock(boolean errorThrown, String metadataLocation, Optional<Long> lockId) {
+    try {
+      if (errorThrown) {
+        // if anything went wrong, clean up the uncommitted metadata file
+        io().deleteFile(metadataLocation);
+      }
+    } catch (RuntimeException e) {
+      LOG.error("Fail to cleanup metadata file at {}", metadataLocation, e);
+      throw e;
+    } finally {
+      unlock(lockId);
+    }
   }
 
   private void unlock(Optional<Long> lockId) {

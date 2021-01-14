@@ -46,6 +46,8 @@ import static org.apache.iceberg.expressions.Expressions.rewriteNot;
  * return value of {@code eval} is false.
  */
 public class InclusiveMetricsEvaluator {
+  private static final int IN_PREDICATE_LIMIT = 200;
+
   private final Expression expr;
 
   public InclusiveMetricsEvaluator(Schema schema, Expression unbound) {
@@ -74,6 +76,7 @@ public class InclusiveMetricsEvaluator {
   private class MetricsEvalVisitor extends BoundExpressionVisitor<Boolean> {
     private Map<Integer, Long> valueCounts = null;
     private Map<Integer, Long> nullCounts = null;
+    private Map<Integer, Long> nanCounts = null;
     private Map<Integer, ByteBuffer> lowerBounds = null;
     private Map<Integer, ByteBuffer> upperBounds = null;
 
@@ -91,6 +94,7 @@ public class InclusiveMetricsEvaluator {
 
       this.valueCounts = file.valueCounts();
       this.nullCounts = file.nullValueCounts();
+      this.nanCounts = file.nanValueCounts();
       this.lowerBounds = file.lowerBounds();
       this.upperBounds = file.upperBounds();
 
@@ -142,6 +146,34 @@ public class InclusiveMetricsEvaluator {
       Integer id = ref.fieldId();
 
       if (containsNullsOnly(id)) {
+        return ROWS_CANNOT_MATCH;
+      }
+
+      return ROWS_MIGHT_MATCH;
+    }
+
+    @Override
+    public <T> Boolean isNaN(BoundReference<T> ref) {
+      Integer id = ref.fieldId();
+
+      if (nanCounts != null && nanCounts.containsKey(id) && nanCounts.get(id) == 0) {
+        return ROWS_CANNOT_MATCH;
+      }
+
+      // when there's no nanCounts information, but we already know the column only contains null,
+      // it's guaranteed that there's no NaN value
+      if (containsNullsOnly(id)) {
+        return ROWS_CANNOT_MATCH;
+      }
+
+      return ROWS_MIGHT_MATCH;
+    }
+
+    @Override
+    public <T> Boolean notNaN(BoundReference<T> ref) {
+      Integer id = ref.fieldId();
+
+      if (containsNaNsOnly(id)) {
         return ROWS_CANNOT_MATCH;
       }
 
@@ -274,6 +306,11 @@ public class InclusiveMetricsEvaluator {
 
       Collection<T> literals = literalSet;
 
+      if (literals.size() > IN_PREDICATE_LIMIT) {
+        // skip evaluating the predicate if the number of values is too big
+        return ROWS_MIGHT_MATCH;
+      }
+
       if (lowerBounds != null && lowerBounds.containsKey(id)) {
         T lower = Conversions.fromByteBuffer(ref.type(), lowerBounds.get(id));
         literals = literals.stream().filter(v -> ref.comparator().compare(lower, v) <= 0).collect(Collectors.toList());
@@ -339,6 +376,11 @@ public class InclusiveMetricsEvaluator {
       return valueCounts != null && valueCounts.containsKey(id) &&
           nullCounts != null && nullCounts.containsKey(id) &&
           valueCounts.get(id) - nullCounts.get(id) == 0;
+    }
+
+    private boolean containsNaNsOnly(Integer id) {
+      return nanCounts != null && nanCounts.containsKey(id) &&
+          valueCounts != null && nanCounts.get(id).equals(valueCounts.get(id));
     }
   }
 }

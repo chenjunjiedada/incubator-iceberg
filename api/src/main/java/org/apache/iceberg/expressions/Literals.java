@@ -39,6 +39,7 @@ import org.apache.iceberg.types.Comparators;
 import org.apache.iceberg.types.Conversions;
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
+import org.apache.iceberg.util.NaNUtil;
 
 class Literals {
   private Literals() {
@@ -57,6 +58,7 @@ class Literals {
   @SuppressWarnings("unchecked")
   static <T> Literal<T> from(T value) {
     Preconditions.checkNotNull(value, "Cannot create expression literal from null");
+    Preconditions.checkArgument(!NaNUtil.isNaN(value), "Cannot create expression literal from NaN");
 
     if (value instanceof Boolean) {
       return (Literal<T>) new Literals.BooleanLiteral((Boolean) value);
@@ -461,10 +463,7 @@ class Literals {
       switch (type.typeId()) {
         case DECIMAL:
           // do not change decimal scale
-          if (value().scale() == ((Types.DecimalType) type).scale()) {
-            return (Literal<T>) this;
-          }
-          return null;
+          return (Literal<T>) this;
         default:
           return null;
       }
@@ -517,12 +516,9 @@ class Literals {
           return (Literal<T>) new UUIDLiteral(UUID.fromString(value().toString()));
 
         case DECIMAL:
-          int scale = ((Types.DecimalType) type).scale();
+          // do not change decimal scale
           BigDecimal decimal = new BigDecimal(value().toString());
-          if (scale == decimal.scale()) {
-            return (Literal<T>) new DecimalLiteral(decimal);
-          }
-          return null;
+          return (Literal<T>) new DecimalLiteral(decimal);
 
         default:
           return null;
