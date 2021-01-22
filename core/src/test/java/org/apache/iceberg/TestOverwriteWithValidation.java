@@ -382,7 +382,7 @@ public class TestOverwriteWithValidation extends TableTestBase {
   }
 
   @Test
-  public void testOverwriteCompatibleRewriteAllowed() {
+  public void testOverwriteIncompatibleRewriteValidated() {
     table.newAppend()
         .appendFile(FILE_DAY_1)
         .appendFile(FILE_DAY_2)
@@ -391,19 +391,18 @@ public class TestOverwriteWithValidation extends TableTestBase {
     Snapshot baseSnapshot = table.currentSnapshot();
     validateSnapshot(null, baseSnapshot, FILE_DAY_1, FILE_DAY_2);
 
+    table.newRewrite()
+        .rewriteFiles(ImmutableSet.of(FILE_DAY_2), ImmutableSet.of(FILE_DAY_2))
+        .commit();
+
     OverwriteFiles overwrite = table.newOverwrite()
         .deleteFile(FILE_DAY_2)
         .addFile(FILE_DAY_2_MODIFIED)
         .validateNoConflictingAppends(baseSnapshot.snapshotId(), EXPRESSION_DAY_2);
 
-    table.newRewrite()
-        .rewriteFiles(ImmutableSet.of(FILE_DAY_2), ImmutableSet.of(FILE_DAY_2))
-        .commit();
-    long committedSnapshotId = table.currentSnapshot().snapshotId();
-
-    overwrite.commit();
-
-    Assert.assertNotEquals("Should successfully commit", committedSnapshotId, table.currentSnapshot().snapshotId());
+    AssertHelpers.assertThrows("Should reject commit",
+        ValidationException.class, "Found conflicting files that can contain records",
+        overwrite::commit);
   }
 
   @Test

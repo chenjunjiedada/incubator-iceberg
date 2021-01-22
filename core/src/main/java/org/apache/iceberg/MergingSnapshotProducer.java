@@ -51,7 +51,7 @@ import static org.apache.iceberg.TableProperties.SNAPSHOT_ID_INHERITANCE_ENABLED
 abstract class MergingSnapshotProducer<ThisT> extends SnapshotProducer<ThisT> {
   // data is only added in "append" and "overwrite" operations
   private static final Set<String> VALIDATE_ADDED_FILES_OPERATIONS =
-      ImmutableSet.of(DataOperations.APPEND, DataOperations.OVERWRITE);
+      ImmutableSet.of(DataOperations.APPEND, DataOperations.OVERWRITE, DataOperations.REPLACE);
   // data files are removed in "overwrite", "replace", and "delete"
   private static final Set<String> VALIDATE_DATA_FILES_EXIST_OPERATIONS =
       ImmutableSet.of(DataOperations.OVERWRITE, DataOperations.REPLACE, DataOperations.DELETE);
