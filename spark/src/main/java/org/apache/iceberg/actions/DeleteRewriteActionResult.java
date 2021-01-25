@@ -17,15 +17,25 @@
  * under the License.
  */
 
-
 package org.apache.iceberg.actions;
 
-import org.apache.iceberg.DataFile;
+import java.util.List;
 import org.apache.iceberg.DeleteFile;
 
-import java.util.List;
+public class DeleteRewriteActionResult {
+  private List<DeleteFile> posDeletes;
+  private List<DeleteFile> eqDeletes;
 
-public class CleanupEqualityDeleteResult {
-    private List<DeleteFile> convertedEqualityDeletes;
-    private List<DeleteFile> addedPositionDeletes;
+  public DeleteRewriteActionResult(List<DeleteFile> eqDeletes, List<DeleteFile> posDeletes) {
+    this.eqDeletes = eqDeletes;
+    this.posDeletes = posDeletes;
+  }
+
+  public List<DeleteFile> deletedFiles() {
+    return eqDeletes;
+  }
+
+  public List<DeleteFile> addedFiles() {
+    return posDeletes;
+  }
 }

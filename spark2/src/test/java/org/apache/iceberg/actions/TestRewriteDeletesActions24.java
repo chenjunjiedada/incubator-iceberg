@@ -17,19 +17,7 @@
  * under the License.
  */
 
-
 package org.apache.iceberg.actions;
 
-import org.apache.iceberg.Table;
-
-public class CleanupEqualityDelete extends BaseAction<CleanupEqualityDeleteResult> {
-    @Override
-    protected Table table() {
-        return null;
-    }
-
-    @Override
-    public CleanupEqualityDeleteResult execute() {
-        return null;
-    }
+public class TestRewriteDeletesActions24 extends TestRewriteDeletesAction {
 }

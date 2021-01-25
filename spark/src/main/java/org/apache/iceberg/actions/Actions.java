@@ -82,6 +82,10 @@ public class Actions {
     return new ExpireSnapshotsAction(spark, table);
   }
 
+  public DeleteRewriteAction rewriteEqDeleteToPosDelete() {
+    return new DeleteRewriteAction(spark, table);
+  }
+
   /**
    * Converts the provided table into an Iceberg table in place. The table will no longer be accessible by it's
    * previous implementation

@@ -52,3 +52,6 @@ derby.log
 
 # Python stuff
 python/.mypy_cache/
+
+#log file
+*.log

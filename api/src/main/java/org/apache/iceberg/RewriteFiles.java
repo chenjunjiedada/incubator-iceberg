@@ -42,4 +42,6 @@ public interface RewriteFiles extends SnapshotUpdate<RewriteFiles> {
    * @return this for method chaining
    */
   RewriteFiles rewriteFiles(Set<DataFile> filesToDelete, Set<DataFile> filesToAdd);
+
+  RewriteFiles rewriteDeletes(Set<DeleteFile> eqDeletes, Set<DeleteFile> posDelete);
 }
