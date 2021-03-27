@@ -41,14 +41,10 @@ import org.apache.iceberg.actions.RewriteDeleteActionResult;
 import org.apache.iceberg.actions.RewriteDeletes;
 import org.apache.iceberg.encryption.EncryptionManager;
 import org.apache.iceberg.io.CloseableIterable;
-import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
-import org.apache.iceberg.relocated.com.google.common.collect.ListMultimap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
-import org.apache.iceberg.relocated.com.google.common.collect.Maps;
-import org.apache.iceberg.relocated.com.google.common.collect.Multimaps;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
 import org.apache.iceberg.spark.SparkUtil;
 import org.apache.iceberg.spark.source.EqualityDeleteRewriter;
@@ -148,7 +144,8 @@ public class BaseRewriteDeletesSparkAction extends BaseSparkAction<RewriteDelete
           .collect(Collectors.toList()));
     });
 
-    Map<StructLikeWrapper, Collection<FileScanTask>> groupedTasks = groupTasksByPartition(tasksWithEqDelete.iterator());
+    Map<StructLikeWrapper, Collection<FileScanTask>> groupedTasks =
+        TableScanUtil.groupTasksByPartition(spec, tasksWithEqDelete.iterator());
 
     // Split and combine tasks under each partition
     List<Pair<StructLike, CombinedScanTask>> combinedScanTasks = groupedTasks.entrySet().stream()
@@ -189,28 +186,12 @@ public class BaseRewriteDeletesSparkAction extends BaseSparkAction<RewriteDelete
 
   @Override
   protected RewriteDeletes self() {
-    return null;
+    return this;
   }
 
   protected EncryptionManager encryptionManager() {
     return encryptionManager;
   }
-
-  private Map<StructLikeWrapper, Collection<FileScanTask>> groupTasksByPartition(
-      CloseableIterator<FileScanTask> tasksIter) {
-    ListMultimap<StructLikeWrapper, FileScanTask> tasksGroupedByPartition = Multimaps.newListMultimap(
-        Maps.newHashMap(), Lists::newArrayList);
-    try (CloseableIterator<FileScanTask> iterator = tasksIter) {
-      iterator.forEachRemaining(task -> {
-        StructLikeWrapper structLike = StructLikeWrapper.forType(spec.partitionType()).set(task.file().partition());
-        tasksGroupedByPartition.put(structLike, task);
-      });
-    } catch (IOException e) {
-      LOG.warn("Failed to close task iterator", e);
-    }
-    return tasksGroupedByPartition.asMap();
-  }
-
 
   private void rewriteEqualityDeletes(List<DeleteFile> eqDeletes, List<DeleteFile> posDeletes) {
     Preconditions.checkArgument(eqDeletes.stream().allMatch(f -> f.content().equals(FileContent.EQUALITY_DELETES)),

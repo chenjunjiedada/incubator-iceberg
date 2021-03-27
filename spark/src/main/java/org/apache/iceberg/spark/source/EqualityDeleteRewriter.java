@@ -58,26 +58,26 @@ import static org.apache.iceberg.TableProperties.DEFAULT_NAME_MAPPING;
 public class EqualityDeleteRewriter implements Serializable {
   private static final Logger LOG = LoggerFactory.getLogger(EqualityDeleteRewriter.class);
   private final PartitionSpec spec;
-  private final Map<String, String> properties;
   private final Schema schema;
-  private final FileFormat format;
+  private final Map<String, String> properties;
   private final Broadcast<FileIO> io;
   private final Broadcast<EncryptionManager> encryptionManager;
   private final LocationProvider locations;
   private final String nameMapping;
   private final boolean caseSensitive;
+  private final FileFormat format;
+
 
   public EqualityDeleteRewriter(Table table, boolean caseSensitive,
                                 Broadcast<FileIO> io, Broadcast<EncryptionManager> encryptionManager) {
     this.spec = table.spec();
     this.schema = table.schema();
-    this.locations = table.locationProvider();
-    this.caseSensitive = caseSensitive;
+    this.properties = table.properties();
     this.io = io;
     this.encryptionManager = encryptionManager;
-    this.properties = table.properties();
+    this.locations = table.locationProvider();
     this.nameMapping = table.properties().get(DEFAULT_NAME_MAPPING);
-
+    this.caseSensitive = caseSensitive;
     String formatString = table.properties().getOrDefault(
         TableProperties.DEFAULT_FILE_FORMAT, TableProperties.DEFAULT_FILE_FORMAT_DEFAULT);
     this.format = FileFormat.valueOf(formatString.toUpperCase(Locale.ENGLISH));
