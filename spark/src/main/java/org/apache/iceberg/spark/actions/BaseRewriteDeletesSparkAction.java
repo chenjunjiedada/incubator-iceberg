@@ -36,13 +36,13 @@ import org.apache.iceberg.RewriteFiles;
 import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
-import org.apache.iceberg.actions.BaseSparkAction;
 import org.apache.iceberg.actions.RewriteDeleteActionResult;
 import org.apache.iceberg.actions.RewriteDeletes;
 import org.apache.iceberg.encryption.EncryptionManager;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Sets;
@@ -200,7 +200,8 @@ public class BaseRewriteDeletesSparkAction extends BaseSparkAction<RewriteDelete
         "The converted deletes should be position deletes");
     try {
       RewriteFiles rewriteFiles = table.newRewrite();
-      rewriteFiles.rewriteDeletes(Sets.newHashSet(eqDeletes), Sets.newHashSet(posDeletes));
+      rewriteFiles.rewriteFiles(ImmutableSet.of(), Sets.newHashSet(eqDeletes), ImmutableSet.of(),
+              Sets.newHashSet(posDeletes));
       rewriteFiles.commit();
     } catch (Exception e) {
       Tasks.foreach(Iterables.transform(posDeletes, f -> f.path().toString()))
