@@ -22,7 +22,6 @@ package org.apache.iceberg.spark.source;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DataTask;
@@ -231,8 +230,8 @@ class RowDataReader extends BaseDataReader<InternalRow> {
     }
 
     @Override
-    protected Function<InternalRow, Boolean> deleteChecker() {
-      return record -> record.getBoolean(deleteMarkerIndex());
+    protected boolean isDeletedRow(InternalRow row) {
+      return row.getBoolean(deleteMarkerIndex());
     }
 
     @Override

@@ -21,7 +21,6 @@ package org.apache.iceberg.flink.source;
 
 import java.util.Map;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.UpdatableRowData;
@@ -179,8 +178,8 @@ class RowDataIterator extends DataIterator<RowData> {
     }
 
     @Override
-    protected Function<RowData, Boolean> deleteChecker() {
-      return record -> record.getBoolean(deleteMarkerIndex());
+    protected boolean isDeletedRow(RowData row) {
+      return row.getBoolean(deleteMarkerIndex());
     }
 
     @Override

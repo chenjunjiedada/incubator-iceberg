@@ -263,7 +263,7 @@ public class Deletes {
     }
 
     private class PositionMarkerIterator extends PositionFilterIterator {
-      protected PositionMarkerIterator(CloseableIterator<T> items, CloseableIterator<Long> deletePositions) {
+      private PositionMarkerIterator(CloseableIterator<T> items, CloseableIterator<Long> deletePositions) {
         super(items, deletePositions);
       }
 
